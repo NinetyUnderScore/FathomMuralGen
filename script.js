@@ -412,9 +412,9 @@ const quantizeChannel = v => Math.round(v / 17) * 17;
 // [r,g,b] (already multiples of 17) -> "rgb" 3-digit hex string
 const rgbToHex3 = rgb => rgb.map(v => (v / 17).toString(16)).join('');
 
-// Number of papers across / down (1x1 unless "Multi-paper" is ticked)
-const papersWide = () => byId('mp').checked ? Math.max(1, Math.min(6, +byId('pw').value || 1)) : 1;
-const papersTall = () => byId('mp').checked ? Math.max(1, Math.min(6, +byId('ph').value || 1)) : 1;
+// Number of papers across / down (1x1 unless "Multi-paper" is ticked). No upper limit.
+const papersWide = () => byId('mp').checked ? Math.max(1, Math.floor(+byId('pw').value) || 1) : 1;
+const papersTall = () => byId('mp').checked ? Math.max(1, Math.floor(+byId('ph').value) || 1) : 1;
 
 // Map a point (u,v) in 0-1 "paper space" to the matching point in the
 // un-rotated crop rectangle, according to the paper rotation.
