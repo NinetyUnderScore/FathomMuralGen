@@ -199,20 +199,19 @@ label{display:flex;gap:6px;align-items:center;margin-top:10px;font-size:12px;col
     <h2>Frequently Asked Questions</h2>
 
     <div class="card">
+      <h3>Can you add <italic>[this feature]</italic></h3>
+      <p>Idk probably, send a message or ping _90_ in the <a href="https://discord.com/channels/1542712522098876548/1567056424704671775/1567056424704671775">thread for this tool</a> on the Fathom Discord server.</p>
+    </div>
+    
+    <div class="card">
       <h3>What font is used?</h3>
-      <p>All murals use the <strong>Legacy</strong> font, which is Roblox's built-in monospace bitmap font available inside <code>SurfaceGui</code> text labels. Every character in Legacy is rendered at a fixed cell size, which is what makes the grid-based mural system work — each <code>@</code> character fills exactly one tile with consistent ink coverage.</p>
+      <p>All murals use the <strong>Legacy</strong> font due to being significantly larger than the other fonts meaning only 80 characters are needed to fill the page.</p>
       <p>The generator always opens its output string with <code>&lt;font face='Legacy'&gt;</code> to ensure this font is applied. If a nested color tag has to re-declare the face after a close, it will use <code>&lt;font face='Legacy' color='…'&gt;</code> automatically.</p>
     </div>
 
     <div class="card">
-      <h3>Grid size per page</h3>
-      <p>Each mural page is <strong>8 columns × 10 rows = 80 tiles</strong>. Every tile holds one <code>@</code> character. The visual proportions of each tile are approximately <strong>56 px wide × 66 px tall</strong> in the editor preview, matching the aspect ratio of the Legacy font glyph in Roblox.</p>
-      <p>In multi-paper mode you can stack pages side by side (up to 6 wide × 6 tall), and the image importer will divide the source image across all of them automatically, with each paper still being 8 × 10 tiles and staying within its own 400-character budget.</p>
-    </div>
-
-    <div class="card">
       <h3>How the character limit works</h3>
-      <p>Roblox's <code>SurfaceGui</code> text labels have a hard limit of <strong>400 characters</strong> of rich text. Every mural string must fit within this budget. The breakdown is:</p>
+      <p>Papers in Fathom have a hard limit of <strong>400 characters</strong> of rich text. Every mural string must fit within this budget. The breakdown is:</p>
       <p>
         <span class="tag">&lt;font face='Legacy'&gt;</span> opening = <strong>19 chars</strong><br>
         <span class="tag">@</span> × 80 tiles = <strong>80 chars</strong><br>
@@ -234,12 +233,12 @@ label{display:flex;gap:6px;align-items:center;margin-top:10px;font-size:12px;col
           <p>Roblox's rich text parser doesn't require a space between consecutive tag attributes, so <code>face='Legacy'color='#fff'</code> is valid. The generator never adds that space, saving 1 character per combined tag.</p>
         </div>
         <div>
-          <h3 style="font-size:12px;margin-bottom:6px">Smart face re-declaration</h3>
+          <h3 style="font-size:12px;margin-bottom:6px">Minimal font re-declaration</h3>
           <p>After a <code>&lt;/font&gt;</code> closes a color tag, the Legacy face is only re-declared in the next opening tag if the stack no longer has a face tag active. If Legacy is already set by a parent tag still open, the new tag is just <code>&lt;font color='…'&gt;</code>.</p>
         </div>
         <div>
           <h3 style="font-size:12px;margin-bottom:6px">No-op close drops</h3>
-          <p>A <code>&lt;/font&gt;</code> on a tile that has nothing to close is silently dropped from the output — it would waste 7 characters and do nothing visually.</p>
+          <p>A <code>&lt;/font&gt;</code> on a tile that has nothing to close is dropped from the output as it would waste 7 characters and do nothing visually.</p>
         </div>
         <div>
           <h3 style="font-size:12px;margin-bottom:6px">Redundant reopen elimination (⚠)</h3>
@@ -247,20 +246,19 @@ label{display:flex;gap:6px;align-items:center;margin-top:10px;font-size:12px;col
         </div>
         <div>
           <h3 style="font-size:12px;margin-bottom:6px">Unclosed trailing tag</h3>
-          <p>The outermost <code>&lt;font face='Legacy'&gt;</code> is never closed at the end of the string. Roblox does not require tags to be closed and leaving it open saves 7 characters.</p>
+          <p>The outermost <code>&lt;font face='Legacy'&gt;</code> (as well as the last color tag) is never closed at the end of the string. Roblox does not require tags to be closed and leaving it open saves 7 characters.</p>
         </div>
       </div>
     </div>
 
     <div class="card">
-      <h3>Image importer — how color regions are chosen</h3>
-      <p>The image importer solves an optimization problem to decide where to place color tags. Because each color change costs 26 characters, the number of colors is severely limited. The solver uses <strong>dynamic programming</strong> to find the optimal partition of the 80 tiles into contiguous "runs", each sharing a single 3-hex color, that minimizes the total squared color error — all while keeping the output string within the character budget you set.</p>
-      <p>The three sampling modes change how the representative color for each run is computed: <em>Nearest</em> samples a single pixel per tile, <em>Tile average</em> averages all pixels within each tile's area, and <em>Run average</em> (the default) averages across all tiles that share the same color tag — which is what the optimizer minimizes and tends to give the smoothest result.</p>
+      <h3>Image importer: how color regions are chosen</h3>
+      <p>The image importer solves an optimization problem to decide where to place color boundaries. Because each color change costs 26 characters, you can only afford around 11 of them per page. The solver finds the best placement by working through all 80 tiles left to right, tracking the best possible color error score for every "characters spent so far" amount at each position, discarding any path that's already beaten by another path that reached the same state.</p>
     </div>
 
     <hr>
     <div class="credit">
-      Made by<strong>Ninety (@Ninetyunderscore)</strong>
+      Made by<strong><a href="https://www.roblox.com/users/83413292/profile">Ninety (@Ninetyunderscore)</a> (Discord: _90_)</strong>
     </div>
   </div>
 </div>
