@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ninety's Mural Generator</title>
+<style>
+:root{--bg:#1c1c1f;--panel:#27272b;--line:#3a3a40;--txt:#e8e8ea;--mut:#9a9aa2;--acc:#5b9cff;--bad:#ff6b6b;--nav:#1a1a1d}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:14px system-ui,sans-serif}
+
+/* ── Nav bar ── */
+nav{background:var(--nav);border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 20px;gap:0;position:sticky;top:0;z-index:100}
+.nav-title{font-size:15px;font-weight:700;color:var(--txt);white-space:nowrap;padding:14px 24px 14px 0;border-right:1px solid var(--line);margin-right:8px;letter-spacing:.01em}
+.tab-btn{background:none;border:none;color:var(--mut);font:14px system-ui,sans-serif;padding:14px 18px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;border-radius:0;transition:color .15s}
+.tab-btn:hover{color:var(--txt);background:none}
+.tab-btn.active{color:var(--acc);border-bottom-color:var(--acc)}
+
+/* ── Page wrapper ── */
+.page{display:none;padding:20px}
+.page.active{display:block}
+
+/* ── Painter tab ── */
+.app{display:grid;grid-template-columns:240px 521px 260px;gap:16px;align-items:start;justify-content:center}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+
+canvas{display:block;border-radius:4px;cursor:crosshair;touch-action:none}
+#hue{margin:10px 0;width:208px;height:16px}
+.tile .warn{position:absolute;bottom:0;right:3px;font:14px sans-serif;color:#c60;cursor:help}
+.row{display:flex;gap:8px;align-items:center;margin:8px 0}
+#sw{width:34px;height:34px;border-radius:6px;border:1px solid var(--line);flex-shrink:0}
+input[type=text]{background:#17171a;border:1px solid var(--line);color:var(--txt);border-radius:6px;padding:7px;width:100%;font:15px monospace}
+button{background:#333339;color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:8px 10px;cursor:pointer;font:inherit}
+button:hover{background:#3d3d44}
+button.on{background:var(--acc);border-color:var(--acc);color:#fff}
+.modes{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+.paper{background:#8A8B8D;padding:12px;border-radius:6px;display:grid;grid-template-columns:repeat(8,56px);gap:3px;user-select:none}
+.tile{position:relative;height:66px;background:#8A8B8D;border:1px solid #7a7b7d;display:flex;align-items:center;justify-content:center;font:bold 30px monospace;cursor:pointer}
+.tile:hover{outline:2px solid var(--acc);z-index:1}
+.tile .at{position:absolute;left:0;top:0;width:100%;height:100%}.tile.nf .at{opacity:.3}
+.tile .code{position:absolute;top:1px;left:0;right:0;text-align:center;font:10px monospace;color:#222;background:#fffa;line-height:12px}
+.tile .cl{position:absolute;bottom:1px;left:3px;font:bold 10px monospace;color:#b00}
+.under{margin-top:10px;display:flex;gap:8px}
+textarea{width:100%;max-width:100%;height:70px;margin-top:10px;background:#17171a;color:var(--txt);border:1px solid var(--line);border-radius:6px;font:11px monospace;padding:6px;resize:vertical}
+.stat{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line)}
+.stat b{font-variant-numeric:tabular-nums}
+.bad{color:var(--bad)}.mut{color:var(--mut);font-size:12px;margin-top:10px;line-height:1.45}
+label{display:flex;gap:6px;align-items:center;margin-top:10px;font-size:12px;color:var(--mut)}
+
+/* ── Image importer tab ── */
+.imp{display:grid;grid-template-columns:440px 300px 1fr;gap:20px;align-items:start;max-width:100%}
+.imcol{display:flex;flex-direction:column;gap:8px}
+.imcol label{margin:0;display:flex;justify-content:space-between;gap:8px;align-items:center;color:var(--txt);font-size:13px}
+.imcol input[type=number],.imcol select{background:#17171a;border:1px solid var(--line);color:var(--txt);border-radius:6px;padding:5px;width:72px;font:13px monospace}
+.imcol select{width:200px}.imcol input[type=range]{width:120px}
+.imcol input[type=color]{width:40px;height:26px;padding:0;border:0;background:none}
+.imp #cg{display:grid;gap:4px}.imp #cg button{padding:5px 2px;font-size:11px}
+.g4{display:grid;grid-template-columns:1fr 1fr;gap:6px 14px}
+.prevs{display:flex;gap:8px;align-items:flex-start;min-height:0}
+.prevs>div{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0;font-size:12px;color:var(--mut)}
+.prevs canvas{width:100%!important;height:auto;display:block}
+
+/* ── FAQ tab ── */
+.faq{max-width:780px;margin:0 auto}
+.faq h2{font-size:20px;font-weight:700;margin:0 0 18px;color:var(--txt)}
+.faq h3{font-size:14px;font-weight:700;color:var(--acc);text-transform:uppercase;letter-spacing:.06em;margin:0 0 8px}
+.faq p{margin:0 0 10px;color:var(--txt);line-height:1.65;font-size:14px}
+.faq code{background:#17171a;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-family:monospace;font-size:13px;color:#c8d8ff}
+.faq .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px 22px;margin-bottom:16px}
+.faq .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.faq .grid .card{margin:0}
+.faq .tag{display:inline-block;background:#17171a;border:1px solid var(--line);border-radius:4px;padding:2px 8px;font:12px monospace;color:#c8d8ff;margin:2px 2px 2px 0}
+.faq hr{border:none;border-top:1px solid var(--line);margin:28px 0}
+.faq .credit{text-align:center;padding:28px 0 8px;color:var(--mut);font-size:13px}
+.faq .credit strong{color:var(--txt);font-size:15px;display:block;margin-top:6px}
+
+/* ── Responsive ── */
+@media(max-width:900px){
+  .app{grid-template-columns:1fr;justify-items:center}
+  .imp{grid-template-columns:1fr}
+  .faq .grid{grid-template-columns:1fr}
+  .page{padding:14px}
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-title">Ninety's Mural Generator</div>
+  <button class="tab-btn active" onclick="showTab('painter',this)">Note Painter</button>
+  <button class="tab-btn" onclick="showTab('importer',this)">Image Importer</button>
+  <button class="tab-btn" onclick="showTab('faq',this)">FAQ</button>
+</nav>
+
+<!-- ══════════════════════════════════════════
+     TAB 1: NOTE PAINTER
+═══════════════════════════════════════════ -->
+<div id="tab-painter" class="page active">
+  <div class="app">
+    <!-- LEFT: colour picker -->
+    <div class="panel">
+      <canvas id="sv" width="208" height="160"></canvas>
+      <canvas id="hue" width="208" height="16"></canvas>
+      <div class="row"><div id="sw"></div><input type="text" id="hex" maxlength="4" value="#fff" spellcheck="false"></div>
+      <div class="modes">
+        <button id="mColor" class="on">Add color tag</button>
+        <button id="mClose">Add &lt;/font&gt; tag</button>
+      </div>
+      <div class="mut">Left-click: place selected tag · Right-click: toggle &lt;/font&gt; · Middle-click: pick color</div>
+    </div>
+
+    <!-- CENTRE: paper + output -->
+    <div class="panel">
+      <div class="paper" id="paper"></div>
+      <div class="under"><button id="copy">Copy raw text</button><button id="reset">Clear all</button></div>
+      <textarea id="out" readonly></textarea>
+    </div>
+
+    <!-- RIGHT: stats -->
+    <div class="panel">
+      <div class="stat"><span>Characters used</span><b id="used"></b></div>
+      <div class="stat"><span>Characters left</span><b id="left"></b></div>
+      <div class="stat"><span>Color changes that still fit</span><b id="fit"></b></div>
+      <div class="stat"><span>Max color changes (empty page)</span><b id="max"></b></div>
+      <div class="stat"><span>Useless nested color tags</span><b id="waste"></b></div>
+      <div class="stat"><span>Tiles that lost Legacy font</span><b id="nof"></b></div>
+      <div class="mut">
+        A "color change" = <code>&lt;/font&gt;</code> + a nested color tag (26 chars).<br><br>
+        Auto-optimizations: a color on tile 1 is merged into the opening tag only if it is the only color tag on the paper; no space between attributes; tags after a closed face are re-declared with <code>face='Legacy'</code> only when needed; no-op closes are dropped; a tile that closes a color and reopens the same color is dropped entirely (⚠); the font tag is never closed at the end.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     TAB 2: IMAGE IMPORTER
+═══════════════════════════════════════════ -->
+<div id="tab-importer" class="page">
+  <div class="panel imp">
+    <div class="imcol">
+      <b>Image importer</b>
+      <canvas id="ic" width="420" height="340" style="background:#17171a"></canvas>
+      <input type="file" id="file" accept="image/*">
+      <div class="row" style="margin:0"><button id="rL">↺ Rotate image</button><button id="rR">↻ Rotate image</button></div>
+      <div class="row" style="margin:0"><button id="pL">↺ Rotate paper</button><button id="pR">↻ Rotate paper</button></div>
+      <div class="row" style="margin:0">
+        <label style="margin:0"><input type="checkbox" id="mp"> Multi-paper</label>
+        <label style="margin:0">wide <input type="number" id="pw" value="2" min="1" max="6" disabled></label>
+        <label style="margin:0">tall <input type="number" id="ph" value="2" min="1" max="6" disabled></label>
+      </div>
+      <div class="row" style="margin:0">
+        <button id="bFill">Fill</button><button id="bFit">Fit</button><button id="bStr">Stretch</button>
+        <label style="margin:0"><input type="checkbox" id="lock" checked> Lock ratio</label>
+      </div>
+      <div class="g4">
+        <label>X <input type="number" id="cx"></label><label>Y <input type="number" id="cy"></label>
+        <label>W <input type="number" id="cw"></label><label>H <input type="number" id="ch"></label>
+      </div>
+      <div class="mut" style="margin:0">Drag = pan · wheel = zoom · blue corner = resize · drop/paste an image too</div>
+    </div>
+
+    <div class="imcol" id="imset">
+      <b>Sampling</b>
+      <select id="meth">
+        <option value="near">Nearest pixel (exact color)</option>
+        <option value="tile">Average of the tile's area</option>
+        <option value="run" selected>Average of all tiles the tag covers</option>
+      </select>
+      <label>Sample X in tile % <input type="number" id="sx" value="50" min="0" max="100"></label>
+      <label>Sample Y in tile % <input type="number" id="sy" value="50" min="0" max="100"></label>
+      <label>Character budget <input type="number" id="bud" value="400" min="120" max="400"></label>
+      <label>Brightness <input type="range" id="br" min="-100" max="100" value="0"></label>
+      <label>Contrast <input type="range" id="ct" min="-100" max="100" value="0"></label>
+      <label>Saturation <input type="range" id="sa" min="0" max="200" value="100"></label>
+      <label>Background / transparent <input type="color" id="bg" value="#000000"></label>
+      <div class="mut" style="margin:0">Sample position only affects "Nearest" (yellow dots). Breakpoints between color tags are chosen automatically (optimal split within the character budget).</div>
+    </div>
+
+    <div class="imcol">
+      <b>Result</b>
+      <div class="prevs">
+        <div>Ideal (unlimited colors)<br><canvas id="gT" width="224" height="330"></canvas></div>
+        <div>Output (3-hex, budgeted)<br><canvas id="gR" width="224" height="330"></canvas></div>
+      </div>
+      <div class="mut" id="ist" style="margin:0">Load an image to begin.</div>
+      <div id="cg"></div>
+      <label>Paper shown in editor <select id="psel" style="width:110px"></select></label>
+      <label><input type="checkbox" id="live"> Live: write result onto the paper</label>
+      <button id="apply" class="on">Apply to paper now</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     TAB 3: FAQ
+═══════════════════════════════════════════ -->
+<div id="tab-faq" class="page">
+  <div class="faq">
+    <h2>Frequently Asked Questions</h2>
+
+    <div class="card">
+      <h3>What font is used?</h3>
+      <p>All murals use the <strong>Legacy</strong> font, which is Roblox's built-in monospace bitmap font available inside <code>SurfaceGui</code> text labels. Every character in Legacy is rendered at a fixed cell size, which is what makes the grid-based mural system work — each <code>@</code> character fills exactly one tile with consistent ink coverage.</p>
+      <p>The generator always opens its output string with <code>&lt;font face='Legacy'&gt;</code> to ensure this font is applied. If a nested color tag has to re-declare the face after a close, it will use <code>&lt;font face='Legacy' color='…'&gt;</code> automatically.</p>
+    </div>
+
+    <div class="card">
+      <h3>Grid size per page</h3>
+      <p>Each mural page is <strong>8 columns × 10 rows = 80 tiles</strong>. Every tile holds one <code>@</code> character. The visual proportions of each tile are approximately <strong>56 px wide × 66 px tall</strong> in the editor preview, matching the aspect ratio of the Legacy font glyph in Roblox.</p>
+      <p>In multi-paper mode you can stack pages side by side (up to 6 wide × 6 tall), and the image importer will divide the source image across all of them automatically, with each paper still being 8 × 10 tiles and staying within its own 400-character budget.</p>
+    </div>
+
+    <div class="card">
+      <h3>How the character limit works</h3>
+      <p>Roblox's <code>SurfaceGui</code> text labels have a hard limit of <strong>400 characters</strong> of rich text. Every mural string must fit within this budget. The breakdown is:</p>
+      <p>
+        <span class="tag">&lt;font face='Legacy'&gt;</span> opening = <strong>19 chars</strong><br>
+        <span class="tag">@</span> × 80 tiles = <strong>80 chars</strong><br>
+        Each color change (<span class="tag">&lt;/font&gt;&lt;font color='#xyz'&gt;</span>) = <strong>26 chars</strong><br>
+        First color (merged into the opening tag as an attribute) = <strong>19 chars</strong> (no extra cost beyond the open)
+      </p>
+      <p>With 80 tiles and the opening tag already consuming 99 characters, a full page leaves room for approximately <strong>11 color changes</strong> before hitting the 400-character ceiling.</p>
+    </div>
+
+    <div class="card">
+      <h3>How optimizations work</h3>
+      <div class="grid">
+        <div>
+          <h3 style="font-size:12px;margin-bottom:6px">First-tile color merge</h3>
+          <p>If only one color tag appears on the entire paper and it's on tile 1, it's merged directly into the opening <code>&lt;font face='Legacy'&gt;</code> as a <code>color</code> attribute instead of being a separate tag. This saves 7 characters.</p>
+        </div>
+        <div>
+          <h3 style="font-size:12px;margin-bottom:6px">No space between attributes</h3>
+          <p>Roblox's rich text parser doesn't require a space between consecutive tag attributes, so <code>face='Legacy'color='#fff'</code> is valid. The generator never adds that space, saving 1 character per combined tag.</p>
+        </div>
+        <div>
+          <h3 style="font-size:12px;margin-bottom:6px">Smart face re-declaration</h3>
+          <p>After a <code>&lt;/font&gt;</code> closes a color tag, the Legacy face is only re-declared in the next opening tag if the stack no longer has a face tag active. If Legacy is already set by a parent tag still open, the new tag is just <code>&lt;font color='…'&gt;</code>.</p>
+        </div>
+        <div>
+          <h3 style="font-size:12px;margin-bottom:6px">No-op close drops</h3>
+          <p>A <code>&lt;/font&gt;</code> on a tile that has nothing to close is silently dropped from the output — it would waste 7 characters and do nothing visually.</p>
+        </div>
+        <div>
+          <h3 style="font-size:12px;margin-bottom:6px">Redundant reopen elimination (⚠)</h3>
+          <p>If a tile closes a color and the very next open tag would reopen the exact same color, the entire close+reopen pair is eliminated. The tile is flagged with ⚠ in the editor. This saves 26 characters at the cost of the one tile's color being "inherited" from the parent.</p>
+        </div>
+        <div>
+          <h3 style="font-size:12px;margin-bottom:6px">Unclosed trailing tag</h3>
+          <p>The outermost <code>&lt;font face='Legacy'&gt;</code> is never closed at the end of the string. Roblox does not require tags to be closed and leaving it open saves 7 characters.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Image importer — how color regions are chosen</h3>
+      <p>The image importer solves an optimization problem to decide where to place color tags. Because each color change costs 26 characters, the number of colors is severely limited. The solver uses <strong>dynamic programming</strong> to find the optimal partition of the 80 tiles into contiguous "runs", each sharing a single 3-hex color, that minimizes the total squared color error — all while keeping the output string within the character budget you set.</p>
+      <p>The three sampling modes change how the representative color for each run is computed: <em>Nearest</em> samples a single pixel per tile, <em>Tile average</em> averages all pixels within each tile's area, and <em>Run average</em> (the default) averages across all tiles that share the same color tag — which is what the optimizer minimizes and tends to give the smoothest result.</p>
+    </div>
+
+    <hr>
+    <div class="credit">
+      Made by<strong>Ninety (@Ninetyunderscore)</strong>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Tab switching ──
+function showTab(id, btn) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + id).classList.add('active');
+  btn.classList.add('active');
+}
+
+// ── All original JS below ──
+const N=80,LIMIT=400,$=id=>document.getElementById(id);
+const GM=(()=>{const g=document.createElement('canvas').getContext('2d');g.font='bold 100px monospace';const m=g.measureText('@');
+  return{w:m.actualBoundingBoxLeft+m.actualBoundingBoxRight,h:m.actualBoundingBoxAscent+m.actualBoundingBoxDescent,
+    cx:(m.actualBoundingBoxRight-m.actualBoundingBoxLeft)/2,cy:(m.actualBoundingBoxDescent-m.actualBoundingBoxAscent)/2}})();
+function at(g,cx,cy,w,h,color,ang=0){g.save();g.translate(cx,cy);g.rotate(ang);g.scale(w/GM.w,h/GM.h);g.translate(-GM.cx,-GM.cy);
+  g.font='bold 100px monospace';g.textAlign='left';g.textBaseline='alphabetic';g.fillStyle=color;g.fillText('@',0,0);g.restore()}
+let tiles=Array.from({length:N},()=>({c:null,x:false}));
+let mode='color',picked='fff',H=0,S=0,V=1;
+
+// ---------- color picker ----------
+const sv=$('sv'),ctx=sv.getContext('2d');
+function hsv2rgb(h,s,v){const f=n=>{const k=(n+h/60)%6;return v-v*s*Math.max(0,Math.min(k,4-k,1))};return[f(5),f(3),f(1)].map(x=>x*255)}
+function rgb2hsv(r,g,b){r/=255;g/=255;b/=255;const m=Math.max(r,g,b),d=m-Math.min(r,g,b);let h=0;
+  if(d){h=m==r?((g-b)/d)%6:m==g?(b-r)/d+2:(r-g)/d+4;h*=60;if(h<0)h+=360}return[h,m?d/m:0,m]}
+function quant(){return hsv2rgb(H,S,V).map(x=>Math.round(x/17).toString(16)).join('')}
+const qpx=(r,g,b)=>[r,g,b].map(x=>Math.round(x/17)*17);
+const hc=$('hue'),hx=hc.getContext('2d');
+function drawHue(){
+  for(let x=0;x<208;x++){const[r,g,b]=qpx(...hsv2rgb(x/208*360,1,1));hx.fillStyle=`rgb(${r},${g},${b})`;hx.fillRect(x,0,1,16)}
+  const m=H/360*208;hx.fillStyle='#fff';hx.fillRect(m-2,0,4,16);hx.fillStyle='#000';hx.fillRect(m-1,0,2,16);
+}
+function hueMove(e){const r=hc.getBoundingClientRect();H=Math.min(359.99,Math.max(0,(e.clientX-r.left)/r.width*360));syncPicker()}
+hc.onpointerdown=e=>{hc.setPointerCapture(e.pointerId);hueMove(e);hc.onpointermove=hueMove};
+hc.onpointerup=()=>hc.onpointermove=null;
+function drawSV(){
+  const im=ctx.createImageData(208,160),d=im.data;
+  for(let y=0;y<160;y++)for(let x=0;x<208;x++){
+    const[r,g,b]=qpx(...hsv2rgb(H,x/208,1-y/160)),k=(y*208+x)*4;
+    d[k]=r;d[k+1]=g;d[k+2]=b;d[k+3]=255;
+  }
+  ctx.putImageData(im,0,0);
+  const x=S*208,y=(1-V)*160;ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.beginPath();ctx.arc(x,y,6,0,7);ctx.stroke();
+  ctx.strokeStyle='#000';ctx.lineWidth=1;ctx.beginPath();ctx.arc(x,y,7.5,0,7);ctx.stroke();
+}
+function syncPicker(fromHex){
+  picked=quant();$('sw').style.background='#'+picked;if(!fromHex)$('hex').value='#'+picked;drawSV();drawHue();
+}
+function svMove(e){const r=sv.getBoundingClientRect();S=Math.min(1,Math.max(0,(e.clientX-r.left)/r.width));V=1-Math.min(1,Math.max(0,(e.clientY-r.top)/r.height));syncPicker()}
+sv.onpointerdown=e=>{sv.setPointerCapture(e.pointerId);svMove(e);sv.onpointermove=svMove};
+sv.onpointerup=()=>sv.onpointermove=null;
+function setHex(h){const[r,g,b]=h.split('').map(c=>parseInt(c+c,16));[H,S,V]=rgb2hsv(r,g,b);syncPicker()}
+$('hex').oninput=e=>{const m=e.target.value.replace('#','');if(/^[0-9a-f]{3}$/i.test(m)){setHex(m.toLowerCase());$('hex').value=e.target.value}};
+$('hex').onblur=()=>$('hex').value='#'+picked;
+
+// ---------- modes ----------
+function setMode(m){mode=m;$('mColor').classList.toggle('on',m=='color');$('mClose').classList.toggle('on',m=='close')}
+$('mColor').onclick=()=>setMode('color');$('mClose').onclick=()=>setMode('close');
+
+// ---------- build output ----------
+const q=c=>"'#"+c+"'";
+function build(T=tiles){
+  const base={f:true,c:null},stack=[base];
+  const merged=!!T[0].c&&!T[0].x&&T.filter(t=>t.c).length==1;if(merged)base.c=T[0].c;
+  let out="<font face='Legacy'"+(merged?'color='+q(base.c):'')+'>',waste=0;const info=[];
+  T.forEach((t,i)=>{
+    const top=stack[stack.length-1];
+    const ign=t.x&&!!t.c&&!!top&&top.c===t.c;
+    if(!ign){
+    if(t.x&&stack.length){stack.pop();out+='</font>'}
+    if(t.c&&!(i==0&&merged)){
+      const face=!stack.some(e=>e.f);
+      if(stack.some(e=>e.c))waste++;
+      stack.push({f:face,c:t.c});
+      out+=(face?"<font face='Legacy'color=":'<font color=')+q(t.c)+'>';
+    }
+    }
+    out+='@';
+    const eff=(stack.find(e=>e.c)||{}).c||null;
+    const last=([...stack].reverse().find(e=>e.c)||{}).c||null;
+    info.push({eff,last,ign,face:stack.some(e=>e.f)});
+  });
+  return{out,info,waste};
+}
+
+// ---------- render ----------
+const paper=$('paper');
+tiles.forEach((_,i)=>{
+  const d=document.createElement('div');d.className='tile';d.innerHTML='<canvas class="at" width="112" height="132"></canvas>';
+  d.onmousedown=e=>e.preventDefault();
+  d.onmouseup=e=>{
+    const t=tiles[i];
+    if(e.button==0){
+      if(mode=='color'){t.c=t.c===picked?null:picked}else t.x=!t.x;
+    }else if(e.button==2){t.x=!t.x}
+    else if(e.button==1){const c=t.c||cache.info[i].last;if(c){setHex(c)}}
+    render();
+  };
+  d.oncontextmenu=e=>e.preventDefault();
+  paper.appendChild(d);
+});
+let cache;
+function render(){
+  cache=build();const{out,info,waste}=cache;
+  [...paper.children].forEach((d,i)=>{
+    const t=tiles[i],f=info[i];
+    d.classList.toggle('nf',!f.face);
+    {const g=d.firstChild.getContext('2d');g.clearRect(0,0,112,132);at(g,56,66,110,122,'#'+(f.eff?f.eff.split('').map(c=>c+c).join(''):'000'))}
+    d.querySelectorAll('.code,.cl,.warn').forEach(n=>n.remove());
+    if(t.c)d.insertAdjacentHTML('beforeend',`<div class="code">${t.c}</div>`);
+    if(t.x)d.insertAdjacentHTML('beforeend','<div class="cl">&lt;/&gt;</div>');
+    if(f.ign)d.insertAdjacentHTML('beforeend','<div class="warn" title="This color tag is ignored as it does not effect the output.">⚠</div>');
+  });
+  $('out').value=out;
+  const used=out.length,left=LIMIT-used,pair=26;
+  $('used').textContent=used+' / '+LIMIT;$('used').className=used>LIMIT?'bad':'';
+  $('left').textContent=left;$('left').className=left<0?'bad':'';
+  $('fit').textContent=Math.max(0,Math.floor(left/pair));
+  $('max').textContent=1+Math.floor((LIMIT-N-"<font face='Legacy'>".length)/pair);
+  $('waste').textContent=waste;$('waste').className=waste?'bad':'';
+  const nof=info.filter(f=>!f.face).length;$('nof').textContent=nof;$('nof').className=nof?'bad':'';
+}
+$('reset').onclick=()=>{tiles.forEach(t=>{t.c=null;t.x=false});render()};
+$('copy').onclick=async()=>{
+  const b=$('copy');try{await navigator.clipboard.writeText($('out').value)}catch{$('out').select();document.execCommand('copy')}
+  b.textContent='Copied!';setTimeout(()=>b.textContent='Copy raw text',1200);
+};
+
+// ---------- image importer ----------
+let ASP=660/448;const ic=$('ic'),ix=ic.getContext('2d'),VW=ic.width,VH=ic.height;
+let img=null,crop={x:0,y:0,w:100,h:100},vs=1,vox=0,voy=0,drag=null,raf=0,lastRes=null;
+const qv=v=>Math.round(v/17)*17,hx3=a=>a.map(v=>(v/17).toString(16)).join('');
+function loadImage(f){
+  const im=new Image();im.onload=()=>{
+    const k=Math.min(1,1200/Math.max(im.width,im.height)),c=document.createElement('canvas');
+    c.width=Math.round(im.width*k);c.height=Math.round(im.height*k);const g=c.getContext('2d');g.drawImage(im,0,0,c.width,c.height);
+    img={w:c.width,h:c.height,c,d:g.getImageData(0,0,c.width,c.height).data};fit('fill');
+  };im.src=URL.createObjectURL(f);
+}
+function fit(m){
+  if(!img)return;let w,h;
+  if(m=='stretch'){w=img.w;h=img.h;$('lock').checked=false}
+  else{$('lock').checked=true;const a=img.w,b=img.h/ASP;w=m=='fill'?Math.min(a,b):Math.max(a,b);h=w*ASP}
+  crop={x:(img.w-w)/2,y:(img.h-h)/2,w,h};
+  const bx=Math.min(0,crop.x),by=Math.min(0,crop.y),bw=Math.max(img.w,crop.x+w)-bx,bh=Math.max(img.h,crop.y+h)-by;
+  vs=Math.min(VW/bw,VH/bh)*.92;vox=(VW-bw*vs)/2-bx*vs;voy=(VH-bh*vs)/2-by*vs;sync();
+}
+function sync(){['x','y','w','h'].forEach(k=>{const e=$('c'+k);if(e!==document.activeElement)e.value=Math.round(crop[k])});schedule()}
+function schedule(){cancelAnimationFrame(raf);raf=requestAnimationFrame(()=>{drawCrop();compute()})}
+function drawCrop(){
+  ix.clearRect(0,0,VW,VH);
+  if(!img){ix.fillStyle='#9a9aa2';ix.font='14px system-ui';ix.textAlign='center';ix.fillText('Choose, drop or paste an image',VW/2,VH/2);return}
+  ix.drawImage(img.c,vox,voy,img.w*vs,img.h*vs);
+  const X=vox+crop.x*vs,Y=voy+crop.y*vs,W=crop.w*vs,H=crop.h*vs;
+  ix.fillStyle='#000a';ix.beginPath();ix.rect(0,0,VW,VH);ix.rect(X,Y,W,H);ix.fill('evenodd');
+  ix.strokeStyle='#5b9cff';ix.lineWidth=2;ix.strokeRect(X,Y,W,H);
+  const pw=PW(),ph=PH(),cols=8*pw,rows=10*ph,odd=prot&1,fcols=odd?rows:cols,frows=odd?cols:rows;
+  const lines=(nx,ny,c,lw)=>{ix.lineWidth=lw;ix.strokeStyle=c;ix.beginPath();
+    for(let i=1;i<nx;i++){ix.moveTo(X+W*i/nx,Y);ix.lineTo(X+W*i/nx,Y+H)}
+    for(let j=1;j<ny;j++){ix.moveTo(X,Y+H*j/ny);ix.lineTo(X+W,Y+H*j/ny)}ix.stroke()};
+  if(W/fcols>5&&H/frows>5)lines(fcols,frows,'#fff4',1);
+  if(pw*ph>1)odd?lines(ph,pw,'#ffd24a',2.5):lines(pw,ph,'#ffd24a',2.5);
+  if($('meth').value=='near'&&Math.min(W/fcols,H/frows)>8){ix.fillStyle='#ff0';const fx=$('sx').value/100,fy=$('sy').value/100;
+    for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){const[U,V]=ROT((c+fx)/cols,(r+fy)/rows);ix.fillRect(X+U*W-1.5,Y+V*H-1.5,3,3)}}
+  {const e=[[X,Y,X+W,Y],[X+W,Y,X+W,Y+H],[X,Y+H,X+W,Y+H],[X,Y,X,Y+H]][prot],o=[[0,10],[-16,0],[0,-10],[16,0]][prot];
+   ix.strokeStyle='#ff8a2a';ix.lineWidth=4;ix.beginPath();ix.moveTo(e[0],e[1]);ix.lineTo(e[2],e[3]);ix.stroke();
+   ix.fillStyle='#ff8a2a';ix.font='bold 10px system-ui';ix.textAlign='center';ix.textBaseline='middle';ix.fillText('TOP',(e[0]+e[2])/2+o[0],(e[1]+e[3])/2+o[1])}
+  ix.fillStyle='#5b9cff';ix.fillRect(X+W-8,Y+H-8,16,16);
+}
+const evp=e=>{const r=ic.getBoundingClientRect();return[(e.clientX-r.left)*VW/r.width,(e.clientY-r.top)*VH/r.height]};
+ic.onpointerdown=e=>{if(!img)return;ic.setPointerCapture(e.pointerId);const p=evp(e);
+  const hx=vox+(crop.x+crop.w)*vs,hy=voy+(crop.y+crop.h)*vs;
+  drag={m:Math.abs(p[0]-hx)<14&&Math.abs(p[1]-hy)<14?'r':'p',p,c:{...crop}}};
+ic.onpointermove=e=>{if(!drag)return;const p=evp(e),dx=(p[0]-drag.p[0])/vs,dy=(p[1]-drag.p[1])/vs;
+  if(drag.m=='p'){crop.x=drag.c.x+dx;crop.y=drag.c.y+dy}
+  else{crop.w=Math.max(8,drag.c.w+dx);crop.h=$('lock').checked?crop.w*ASP:Math.max(8,drag.c.h+dy)}sync()};
+ic.onpointerup=()=>drag=null;
+ic.onwheel=e=>{if(!img)return;e.preventDefault();const k=e.deltaY<0?.92:1.087,cx=crop.x+crop.w/2,cy=crop.y+crop.h/2;
+  crop.w*=k;crop.h=$('lock').checked?crop.w*ASP:crop.h*k;crop.x=cx-crop.w/2;crop.y=cy-crop.h/2;sync()};
+ic.ondragover=e=>e.preventDefault();ic.ondrop=e=>{e.preventDefault();const f=e.dataTransfer.files[0];f&&loadImage(f)};
+document.onpaste=e=>{const f=[...e.clipboardData.files].find(f=>f.type.startsWith('image'));f&&loadImage(f)};
+$('file').onchange=e=>e.target.files[0]&&loadImage(e.target.files[0]);
+$('bFill').onclick=()=>fit('fill');$('bFit').onclick=()=>fit('fit');$('bStr').onclick=()=>fit('stretch');
+['x','y','w','h'].forEach(k=>$('c'+k).oninput=e=>{const v=+e.target.value;
+  if(!img||!isFinite(v)||((k=='w'||k=='h')&&v<=0))return;crop[k]=v;
+  if($('lock').checked){if(k=='w')crop.h=v*ASP;if(k=='h')crop.w=v/ASP}sync()});
+document.querySelector('.imp').addEventListener('input',e=>['mp','pw','ph'].includes(e.target.id)?layout():schedule());
+
+const adj=c=>{const b=$('br').value*2.55,k=(+$('ct').value+100)/100,s=$('sa').value/100,L=.299*c[0]+.587*c[1]+.114*c[2];
+  return c.map(v=>Math.max(0,Math.min(255,(L+(v-L)*s-128)*k+128+b)))};
+const PW=()=>$('mp').checked?Math.max(1,Math.min(6,+$('pw').value||1)):1,PH=()=>$('mp').checked?Math.max(1,Math.min(6,+$('ph').value||1)):1;
+let lastPapers=null,prot=0;
+const ROT=(u,v)=>[[u,v],[1-v,u],[1-u,1-v],[v,1-u]][prot];
+$('pL').onclick=()=>{prot=(prot+3)%4;layout()};$('pR').onclick=()=>{prot=(prot+1)%4;layout()};
+function layout(){
+  const pw=PW(),ph=PH(),old=+$('psel').value||0;ASP=prot&1?pw*448/(ph*660):ph*660/(pw*448);
+  $('pw').disabled=$('ph').disabled=!$('mp').checked;
+  $('psel').innerHTML=Array.from({length:pw*ph},(_,k)=>`<option value="${k}">Row ${(k/pw|0)+1}, Col ${k%pw+1}</option>`).join('');
+  $('psel').value=old<pw*ph?old:0;$('cg').style.display=pw*ph>1?'grid':'none';
+  img?fit('fill'):schedule();
+}
+function rotate(d){
+  if(!img)return;const c=document.createElement('canvas');c.width=img.h;c.height=img.w;const g=c.getContext('2d');
+  g.translate(c.width/2,c.height/2);g.rotate(d*Math.PI/2);g.drawImage(img.c,-img.w/2,-img.h/2);
+  img={w:c.width,h:c.height,c,d:g.getImageData(0,0,c.width,c.height).data};fit('fill');
+}
+$('rL').onclick=()=>rotate(-1);$('rR').onclick=()=>rotate(1);
+function sampleTiles(){
+  const cols=8*PW(),rows=10*PH(),bg=[1,3,5].map(i=>parseInt($('bg').value.substr(i,2),16)),m=$('meth').value,
+    fx=$('sx').value/100,fy=$('sy').value/100,out=[],d=img.d;
+  const px=(x,y)=>{if(x<0||y<0||x>=img.w||y>=img.h)return bg;const k=(y*img.w+x)*4,a=d[k+3]/255;
+    return[0,1,2].map(i=>d[k+i]*a+bg[i]*(1-a))};
+  for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){
+    const P=(u,v)=>{const[U,V]=ROT(u,v);return[crop.x+U*crop.w,crop.y+V*crop.h]},
+      a=P(c/cols,r/rows),b=P((c+1)/cols,(r+1)/rows),x0=Math.min(a[0],b[0]),y0=Math.min(a[1],b[1]),tw=Math.abs(b[0]-a[0]),th=Math.abs(b[1]-a[1]);
+    let R=0,G=0,B=0,n=0;
+    if(m=='near'){{const q=P((c+fx)/cols,(r+fy)/rows);[R,G,B]=px(Math.floor(q[0]),Math.floor(q[1]));n=1}}
+    else{const xa=Math.floor(x0),xb=Math.max(xa+1,Math.ceil(x0+tw)),ya=Math.floor(y0),yb=Math.max(ya+1,Math.ceil(y0+th)),
+        sx=Math.max(1,Math.floor((xb-xa)/16)),sy=Math.max(1,Math.floor((yb-ya)/16));
+      for(let y=ya;y<yb;y+=sy)for(let x=xa;x<xb;x+=sx){const p=px(x,y);R+=p[0];G+=p[1];B+=p[2];n++}}
+    out.push(adj([R/n,G/n,B/n]));
+  }
+  return out;
+}
+function solve(T){
+  const m=$('meth').value,Pr=[0],Pg=[0],Pb=[0],P2=[0];
+  T.forEach(c=>{Pr.push(Pr.at(-1)+c[0]);Pg.push(Pg.at(-1)+c[1]);Pb.push(Pb.at(-1)+c[2]);P2.push(P2.at(-1)+c[0]*c[0]+c[1]*c[1]+c[2]*c[2])});
+  const C=Math.max(0,Math.min(400,+$('bud').value||400)-100),W=C+1,INF=1e18,SZ=81*W*2;
+  const dp=new Float64Array(SZ).fill(INF),bi=new Int16Array(SZ),bc=new Int16Array(SZ),bt=new Int8Array(SZ),id=(j,c,t)=>(j*W+c)*2+t;
+  const col=(i,j)=>m=='run'?[Pr,Pg,Pb].map(P=>qv((P[j]-P[i])/(j-i))):T[i].map(qv);
+  for(let j=1;j<=80;j++)for(let i=0;i<j;i++){
+    const n=j-i,e0=P2[j]-P2[i],mm=col(i,j),
+      e1=e0-2*(mm[0]*(Pr[j]-Pr[i])+mm[1]*(Pg[j]-Pg[i])+mm[2]*(Pb[j]-Pb[i]))+n*(mm[0]*mm[0]+mm[1]*mm[1]+mm[2]*mm[2]);
+    const set=(nc,t,v,c0,t0)=>{if(nc>C)return;const k=id(j,nc,t);if(v<dp[k]){dp[k]=v;bi[k]=i;bc[k]=c0;bt[k]=t0}};
+    if(i==0){set(0,0,e0,0,0);set(19,1,e1,0,0)}
+    else for(let c0=0;c0<=C;c0++)for(let t0=0;t0<2;t0++){const v=dp[id(i,c0,t0)];if(v>=INF)continue;
+      if(t0==1)set(c0+7,0,v+e0,c0,t0);set(c0+(t0?26:19),1,v+e1,c0,t0)}
+  }
+  let k=-1,bv=INF;for(let c=0;c<=C;c++)for(let t=0;t<2;t++){const v=dp[id(80,c,t)];if(v<bv){bv=v;k=id(80,c,t)}}
+  const runs=[];for(let j=80;j>0;){const i=bi[k];runs.unshift([i,j,k%2]);k=id(i,bc[k],bt[k]);j=i}
+  const res=Array.from({length:80},()=>({c:null,x:false}));
+  runs.forEach(([i,j,t],ri)=>{const prev=runs[ri-1];
+    if(t==1){res[i].c=hx3(col(i,j));if(prev&&prev[2]==1)res[i].x=true}else if(prev)res[i].x=true});
+  return{res,runs,bv,nc:runs.filter(r=>r[2]).length};
+}
+function mosaic(id,pw,ph,f){
+  const cv=$(id),g=cv.getContext('2d'),odd=prot&1,cw=odd?33:28,ch=odd?28:33,cols=8*pw,rows=10*ph,dc=odd?rows:cols,dr=odd?cols:rows,bw=odd?10:8,bh=odd?8:10;
+  cv.width=dc*cw;cv.height=dr*ch;cv.style.width=Math.min(dc*cw/1.4,280)+'px';
+  g.fillStyle='#8A8B8D';g.fillRect(0,0,cv.width,cv.height);
+  for(let R=0;R<rows;R++)for(let C=0;C<cols;C++){
+    const[U,V]=ROT((C+.5)/cols,(R+.5)/rows);
+    at(g,(Math.floor(U*dc)+.5)*cw,(Math.floor(V*dr)+.5)*ch,27,30,f((R/10|0)*pw+(C/8|0),(R%10)*8+C%8),prot*Math.PI/2)}
+  if(pw*ph>1){g.strokeStyle='#555';g.lineWidth=3;g.beginPath();
+    for(let i=1;i<dc/bw;i++){g.moveTo(i*bw*cw,0);g.lineTo(i*bw*cw,cv.height)}
+    for(let j=1;j<dr/bh;j++){g.moveTo(0,j*bh*ch);g.lineTo(cv.width,j*bh*ch)}g.stroke()}
+}
+async function cp(t,b){const o=b.textContent;try{await navigator.clipboard.writeText(t)}catch{const a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();document.execCommand('copy');a.remove()}
+  b.textContent='Copied!';setTimeout(()=>b.textContent=o,1000)}
+function compute(){
+  if(!img){lastPapers=null;return}
+  const pw=PW(),ph=PH(),cols=8*pw,G=sampleTiles(),papers=[];let tot=0,tags=0,mx=0;
+  for(let pr=0;pr<ph;pr++)for(let pc=0;pc<pw;pc++){
+    const T=[];for(let r=0;r<10;r++)for(let c=0;c<8;c++)T.push(G[(pr*10+r)*cols+pc*8+c]);
+    const so=solve(T),b=build(so.res);papers.push({...so,b,T});tot+=so.bv;tags+=so.nc;mx=Math.max(mx,b.out.length)}
+  lastPapers=papers;
+  mosaic('gT',pw,ph,(k,i)=>`rgb(${papers[k].T[i].map(Math.round)})`);
+  mosaic('gR',pw,ph,(k,i)=>{const e=papers[k].b.info[i].eff;return e?'#'+e.split('').map(c=>c+c).join(''):'#000'});
+  const sel=Math.min(+$('psel').value||0,papers.length-1),cg=$('cg');
+  cg.style.gridTemplateColumns=`repeat(${prot&1?ph:pw},1fr)`;cg.innerHTML='';
+  if(papers.length>1)papers.forEach((p,k)=>{const b=document.createElement('button');b.textContent=`Copy ${(k/pw|0)+1},${k%pw+1} (${p.b.out.length})`;
+    if(k==sel)b.className='on';b.onclick=()=>cp(p.b.out,b);
+    {const[U,V]=ROT((k%pw+.5)/pw,((k/pw|0)+.5)/ph),dpw=prot&1?ph:pw,dph=prot&1?pw:ph;b.style.gridColumn=Math.floor(U*dpw)+1;b.style.gridRow=Math.floor(V*dph)+1}
+    cg.appendChild(b)});
+  $('ist').textContent=`${papers.length} paper${papers.length>1?'s':''} · longest ${mx}/400 chars · ${tags} color tags · RMS error ${Math.sqrt(tot/(240*papers.length)).toFixed(1)}/255`;
+  if($('live').checked)applyRes();
+}
+function applyRes(){if(!lastPapers)return;const p=lastPapers[Math.min(+$('psel').value||0,lastPapers.length-1)];p.res.forEach((t,i)=>Object.assign(tiles[i],t));render()}
+$('apply').onclick=applyRes;
+layout();
+syncPicker();render();
+</script>
+</body>
+</html>
