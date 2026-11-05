@@ -28,6 +28,9 @@ nav{background:var(--nav);border-bottom:1px solid var(--line);display:flex;align
 canvas{display:block;border-radius:4px;cursor:crosshair;touch-action:none}
 #hue{margin:10px 0;width:208px;height:16px}
 .tile .warn{position:absolute;bottom:0;right:3px;font:14px sans-serif;color:#c60;cursor:help}
+.tile .dp{position:absolute;top:0;right:2px;font:9px monospace;color:#444;opacity:.7;pointer-events:none}
+.tile .dp.over{color:#c00;font-weight:700;opacity:1}
+.tile.deep{outline:2px solid var(--bad);outline-offset:-2px}
 .row{display:flex;gap:8px;align-items:center;margin:8px 0}
 #sw{width:34px;height:34px;border-radius:6px;border:1px solid var(--line);flex-shrink:0}
 input[type=text]{background:#17171a;border:1px solid var(--line);color:var(--txt);border-radius:6px;padding:7px;width:100%;font:15px monospace}
@@ -35,7 +38,8 @@ button{background:#333339;color:var(--txt);border:1px solid var(--line);border-r
 button:hover{background:#3d3d44}
 button.on{background:var(--acc);border-color:var(--acc);color:#fff}
 .modes{display:flex;flex-direction:column;gap:8px;margin-top:12px}
-/* Tiles scale with the panel width (8 columns); height follows the original 56:66 ratio */
+.rng{width:100%;margin:6px 0 0}
+/* Tiles scale with the panel width; height follows the original 56:66 ratio */
 .paper{background:#8A8B8D;padding:12px;border-radius:6px;display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:3px;user-select:none}
 .tile{position:relative;aspect-ratio:56/66;background:#8A8B8D;border:1px solid #7a7b7d;display:flex;align-items:center;justify-content:center;font:bold 30px monospace;cursor:pointer}
 .tile:hover{outline:2px solid var(--acc);z-index:1}
@@ -63,6 +67,7 @@ label{display:flex;gap:6px;align-items:center;margin-top:10px;font-size:12px;col
 .prevs>div{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0;font-size:12px;color:var(--mut)}
 .prevs canvas{width:100%!important;height:auto;display:block}
 #ic{max-width:100%;height:auto}
+.note{background:#17171a;border:1px solid var(--line);border-left:3px solid #c60;border-radius:6px;padding:8px 10px;font-size:12px;color:var(--mut);line-height:1.45}
 
 /* ── FAQ tab ── */
 .faq{max-width:780px;margin:0 auto}
@@ -107,6 +112,7 @@ label{display:flex;gap:6px;align-items:center;margin-top:10px;font-size:12px;col
   .tile .code{font-size:8px;line-height:10px}
   .tile .cl{font-size:8px}
   .tile .warn{font-size:11px;right:1px}
+  .tile .dp{font-size:8px}
 
   /* Importer: let button/label rows wrap instead of overflowing */
   .imcol .row{flex-wrap:wrap}
@@ -141,7 +147,15 @@ label{display:flex;gap:6px;align-items:center;margin-top:10px;font-size:12px;col
         <button id="mColor" class="on">Add color tag</button>
         <button id="mClose">Add &lt;/font&gt; tag</button>
       </div>
-      <div class="mut">Left-click: place selected tag · Right-click: toggle &lt;/font&gt; · Middle-click: pick color</div>
+
+      <label for="nest">Nesting limit <b id="nestVal">2</b></label>
+      <input type="range" id="nest" class="rng" min="0" max="8" step="1" value="2">
+      <div class="mut" style="margin-top:4px">
+        Up to <b id="nestTags">3</b> color tags may stay open at once. The small number in
+        each tile's corner is how many color tags are open there — a red one exceeds the limit.
+      </div>
+
+      <div class="mut">Left-click: place selected tag · Right-click: cycle &lt;/font&gt; count · Middle-click: pick color</div>
     </div>
 
     <!-- CENTRE: paper + output -->
@@ -157,11 +171,18 @@ label{display:flex;gap:6px;align-items:center;margin-top:10px;font-size:12px;col
       <div class="stat"><span>Characters left</span><b id="left"></b></div>
       <div class="stat"><span>Color changes that still fit</span><b id="fit"></b></div>
       <div class="stat"><span>Max color changes (empty page)</span><b id="max"></b></div>
-      <div class="stat"><span>Useless nested color tags</span><b id="waste"></b></div>
+      <div class="stat"><span>Nested color tags</span><b id="waste"></b></div>
+      <div class="stat"><span>Color nesting depth</span><b id="depth"></b></div>
       <div class="stat"><span>Tiles that lost Legacy font</span><b id="nof"></b></div>
       <div class="mut">
-        A "color change" = <code>&lt;/font&gt;</code> + a nested color tag (26 chars).<br><br>
-        Auto-optimizations: a color on tile 1 is merged into the opening tag only if it is the only color tag on the paper; no space between attributes; tags after a closed face are re-declared with <code>face='Legacy'</code> only when needed; no-op closes are dropped; a tile that closes a color and reopens the same color is dropped entirely (⚠); the font tag is never closed at the end.
+        A "color change" costs <b>19 chars</b> when the new tag is nested inside the current
+        one, or <b>26 chars</b> (<code>&lt;/font&gt;</code> + a new tag) once the nesting
+        limit is reached.<br><br>
+        Auto-optimizations: a color on tile 1 is merged into the opening tag only if it is the
+        only color tag on the paper; no space between attributes; tags after a closed face are
+        re-declared with <code>face='Legacy'</code> only when needed; no-op closes are dropped;
+        a tile that closes a color and reopens the same color is dropped entirely (⚠); the
+        outermost font tag is never closed at the end.
       </div>
     </div>
   </div>
@@ -182,6 +203,13 @@ label{display:flex;gap:6px;align-items:center;margin-top:10px;font-size:12px;col
         <label style="margin:0"><input type="checkbox" id="mp"> Multi-paper</label>
         <label style="margin:0">wide <input type="number" id="pw" value="2" min="1" disabled></label>
         <label style="margin:0">tall <input type="number" id="ph" value="2" min="1" disabled></label>
+      </div>
+      <label style="margin:0"><input type="checkbox" id="ovl"> Overlap papers (5×6 grid + newlines)</label>
+      <div class="note">
+        Overlapping papers trade paper count for detail. Each paper then only uses
+        <b>30 tiles</b> (5 wide × 6 tall, one newline per row) instead of 80, so you need
+        roughly <b>2.7× more papers</b> for the same mural — but every paper can afford far
+        more color changes per tile, so fine detail survives.
       </div>
       <div class="row" style="margin:0">
         <button id="bFill">Fill</button><button id="bFit">Fit</button><button id="bStr">Stretch</button>
@@ -204,11 +232,12 @@ label{display:flex;gap:6px;align-items:center;margin-top:10px;font-size:12px;col
       <label>Sample X in tile % <input type="number" id="sx" value="50" min="0" max="100"></label>
       <label>Sample Y in tile % <input type="number" id="sy" value="50" min="0" max="100"></label>
       <label>Character budget <input type="number" id="bud" value="400" min="120" max="400"></label>
+      <label>Nesting limit <input type="range" id="nest2" min="0" max="8" step="1" value="2"></label>
       <label>Brightness <input type="range" id="br" min="-100" max="100" value="0"></label>
       <label>Contrast <input type="range" id="ct" min="-100" max="100" value="0"></label>
-      <label>Saturation <input type="range" id="sa" min="0" max="200" value="100"></label>
+      <label>Saturation <input type="range" id="sa" min="0" max="100" value="100"></label>
       <label>Background / transparent <input type="color" id="bg" value="#000000"></label>
-      <div class="mut" style="margin:0">Sample position only affects "Nearest" (yellow dots). Breakpoints between color tags are chosen automatically (optimal split within the character budget).</div>
+      <div class="mut" style="margin:0">Sample position only affects "Nearest" (yellow dots). Breakpoints between color tags are chosen automatically (optimal split within the character budget and nesting limit).</div>
     </div>
 
     <div class="imcol">
@@ -237,7 +266,7 @@ label{display:flex;gap:6px;align-items:center;margin-top:10px;font-size:12px;col
       <h3>Can you add <italic>[this feature]</italic></h3>
       <p>Idk probably, send a message or ping _90_ in the <a href="https://discord.com/channels/1542712522098876548/1567056424704671775/1567056424704671775">thread for this tool</a> on the Fathom Discord server.</p>
     </div>
-    
+
     <div class="card">
       <h3>What font is used?</h3>
       <p>All murals use the <strong>Legacy</strong> font due to being significantly larger than the other fonts meaning only 80 characters are needed to fill the page.</p>
@@ -250,10 +279,24 @@ label{display:flex;gap:6px;align-items:center;margin-top:10px;font-size:12px;col
       <p>
         <span class="tag">&lt;font face='Legacy'&gt;</span> opening = <strong>19 chars</strong><br>
         <span class="tag">@</span> × 80 tiles = <strong>80 chars</strong><br>
-        Each color change (<span class="tag">&lt;/font&gt;&lt;font color='#xyz'&gt;</span>) = <strong>26 chars</strong><br>
-        First color (merged into the opening tag as an attribute) = <strong>19 chars</strong> (no extra cost beyond the open)
+        A <em>nested</em> color tag (<span class="tag">&lt;font color='#xyz'&gt;</span>) = <strong>19 chars</strong><br>
+        A color change at the nesting limit (<span class="tag">&lt;/font&gt;&lt;font color='#xyz'&gt;</span>) = <strong>26 chars</strong><br>
+        First color (merged into the opening tag as an attribute) = <strong>13 chars</strong>
       </p>
-      <p>With 80 tiles and the opening tag already consuming 99 characters, a full page leaves room for approximately <strong>11 color changes</strong> before hitting the 400-character ceiling.</p>
+      <p>With 80 tiles and the opening tag already consuming 99 characters, a full page leaves room for approximately <strong>11–14 color changes</strong> depending on how deeply you are allowed to nest.</p>
+    </div>
+
+    <div class="card">
+      <h3>Tag nesting limit</h3>
+      <p>Color tags do <strong>not</strong> have to be closed before the next one starts. A color tag opened inside another simply takes over, and when it closes the previous color comes back. What actually matters is how many tags can be open <em>at the same time</em>.</p>
+      <p>The <strong>Nesting limit</strong> slider (0–8) lets you pick the deepest stack your mural is allowed to use. At 0 you must close a tag before opening another (every change costs 26 chars). At 1 you may stack two tags, which makes every change after the first cost only 19 chars. Each extra level gives you one more cheap change.</p>
+      <p>In the Note Painter the current depth is printed in the corner of every tile, so you can build something manually and immediately see whether it fits the limit you selected.</p>
+    </div>
+
+    <div class="card">
+      <h3>Overlapping papers (5×6 mode)</h3>
+      <p>Papers can be placed so that they overlap, which means each paper only needs to use its top‑left <strong>5×6</strong> corner. The importer writes five <code>@</code> per row followed by a newline, and leaves the bottom four rows untouched.</p>
+      <p>Each paper then carries 30 tiles instead of 80. That costs you roughly 2.7× more papers for the same picture, but the string has ~45 extra characters of headroom, which buys several additional color changes <em>per paper</em> — so small details survive instead of being averaged away.</p>
     </div>
 
     <div class="card">
@@ -261,11 +304,15 @@ label{display:flex;gap:6px;align-items:center;margin-top:10px;font-size:12px;col
       <div class="grid">
         <div>
           <h3 style="font-size:12px;margin-bottom:6px">First-tile color merge</h3>
-          <p>If only one color tag appears on the entire paper and it's on tile 1, it's merged directly into the opening <code>&lt;font face='Legacy'&gt;</code> as a <code>color</code> attribute instead of being a separate tag. This saves 7 characters.</p>
+          <p>If only one color tag appears on the entire paper and it's on tile 1, it's merged directly into the opening <code>&lt;font face='Legacy'&gt;</code> as a <code>color</code> attribute instead of being a separate tag.</p>
         </div>
         <div>
           <h3 style="font-size:12px;margin-bottom:6px">No space between attributes</h3>
           <p>Roblox's rich text parser doesn't require a space between consecutive tag attributes, so <code>face='Legacy'color='#fff'</code> is valid. The generator never adds that space, saving 1 character per combined tag.</p>
+        </div>
+        <div>
+          <h3 style="font-size:12px;margin-bottom:6px">Nested instead of closed</h3>
+          <p>As long as the nesting limit allows it, a new color tag is opened inside the previous one instead of closing first. That is 19 characters instead of 26 — a 7 character saving on almost every color change.</p>
         </div>
         <div>
           <h3 style="font-size:12px;margin-bottom:6px">Minimal font re-declaration</h3>
@@ -288,7 +335,7 @@ label{display:flex;gap:6px;align-items:center;margin-top:10px;font-size:12px;col
 
     <div class="card">
       <h3>Image importer: how color regions are chosen</h3>
-      <p>The image importer solves an optimization problem to decide where to place color boundaries. Because each color change costs 26 characters, you can only afford around 11 of them per page. The solver finds the best placement by working through all 80 tiles left to right, tracking the best possible color error score for every "characters spent so far" amount at each position, discarding any path that's already beaten by another path that reached the same state.</p>
+      <p>The image importer solves an optimization problem to decide where to place color boundaries. The solver tracks, for every tile position, every possible "characters spent so far" amount and every possible nesting depth, keeping only the best color error reachable for each combination. From that it picks the cheapest‑error path that still fits inside the character budget and the nesting limit.</p>
     </div>
 
     <hr>

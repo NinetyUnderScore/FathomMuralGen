@@ -1,20 +1,35 @@
-// =====================================================================
+/// =====================================================================
 //  Ninety's Mural Generator – script
 //
 //  Colors are stored as 3-digit hex strings ("f80" = #ff8800) because
 //  that is the shortest form that fits in a Fathom paper.
 //
-//  A "tile" is one '@' character on the paper (8 columns x 10 rows = 80).
-//  Each tile in the painter has two settings:
-//      color : 3-digit hex string, or null  -> open a <font color> tag here
-//      close : boolean                      -> put a </font> before this tile
+//  A "tile" is one '@' character on the paper. Each tile has two settings:
+//      color  : 3-digit hex string, or null  -> open a <font color> tag here
+//      closes : integer                      -> emit this many </font> here
+//
+//  Color tags may be NESTED instead of closed. A tile's effective color
+//  is the innermost open tag; closing the inner tag restores the outer
+//  color. The nesting limit slider constrains how many tags may be open
+//  at once.
+//
+//  Overlap mode uses a 5x6 grid per paper (with newlines after every row)
+//  instead of the normal 8x10, trading more papers for more color changes
+//  per paper.
 // =====================================================================
 
 // ---------------------------------------------------------------------
 //  Constants & small helpers
 // ---------------------------------------------------------------------
-const TILE_COUNT = 80;      // tiles on one paper (8 x 10)
-const CHAR_LIMIT = 400;     // max characters of rich text per paper
+let nestingLimit = 2;      // 0-8, slider value. maxOpen = nestingLimit + 1
+let overlapMode = false;   // when true, each paper is 5x6 (with newlines)
+let CHAR_LIMIT = 400;
+
+const getMaxOpen = () => nestingLimit + 1;
+const getColsPerPaper = () => overlapMode ? 5 : 8;
+const getRowsPerPaper = () => overlapMode ? 6 : 10;
+const getTileCount = () => getColsPerPaper() * getRowsPerPaper();
+
 const byId = id => document.getElementById(id);
 
 // Convert "f80" -> "#ff8800". Falls back to black for null/undefined.
@@ -24,8 +39,15 @@ const hex3ToCss = hex3 =>
 // Wrap a color in the single quotes used inside the font tag: '#f80'
 const quoteColor = hex3 => "'#" + hex3 + "'";
 
+// Base character count: opening tag + all @ plus (overlap only) newlines
+function baseCharCount() {
+  const n = getTileCount();
+  const newlines = overlapMode ? Math.ceil(n / getColsPerPaper()) : 0;
+  return "<font face='Legacy'>".length + n + newlines;
+}
+
 // ---------------------------------------------------------------------
-//  Tab switching (called from the nav buttons' onclick attributes)
+//  Tab switching
 // ---------------------------------------------------------------------
 function showTab(tabName, button) {
   document.querySelectorAll('.page').forEach(page => page.classList.remove('active'));
@@ -35,9 +57,7 @@ function showTab(tabName, button) {
 }
 
 // ---------------------------------------------------------------------
-//  Drawing an '@' glyph so that it fills an exact rectangle
-//  Measure how big a bold monospace '@' is at 100px, then scale/translate
-//  so the glyph's ink box covers the requested width/height.
+//  Drawing an '@' glyph that fills an exact rectangle
 // ---------------------------------------------------------------------
 const GLYPH_METRICS = (() => {
   const g = document.createElement('canvas').getContext('2d');
@@ -51,8 +71,6 @@ const GLYPH_METRICS = (() => {
   };
 })();
 
-// Draw an '@' centered on (centerX, centerY), stretched to width x height,
-// optionally rotated by `angle` radians.
 function drawAtGlyph(g, centerX, centerY, width, height, color, angle = 0) {
   g.save();
   g.translate(centerX, centerY);
@@ -70,11 +88,11 @@ function drawAtGlyph(g, centerX, centerY, width, height, color, angle = 0) {
 // ---------------------------------------------------------------------
 //  Painter state
 // ---------------------------------------------------------------------
-let tiles = Array.from({ length: TILE_COUNT }, () => ({ color: null, close: false }));
-let clickMode = 'color';       // what a left-click does: 'color' or 'close'
-let selectedColor = 'fff';     // currently picked color (3-digit hex)
-let hue = 0, sat = 0, val = 1; // picker position: hue 0-360, saturation/value 0-1
-let lastBuild;                 // result of the most recent buildOutput() call
+let tiles = [];
+let clickMode = 'color';
+let selectedColor = 'fff';
+let hue = 0, sat = 0, val = 1;
+let lastBuild;
 
 // ---------------------------------------------------------------------
 //  Color math
@@ -102,17 +120,15 @@ function rgbToHsv(r, g, b) {
   return [h, max ? delta / max : 0, max];
 }
 
-// Snap an 8-bit channel to the nearest value representable by one hex digit (multiples of 17)
 const snapTo4Bit = x => Math.round(x / 17) * 17;
 const snapRgb = (r, g, b) => [r, g, b].map(snapTo4Bit);
 
-// Current picker position -> 3-digit hex string
 function pickerToHex3() {
   return hsvToRgb(hue, sat, val).map(x => Math.round(x / 17).toString(16)).join('');
 }
 
 // ---------------------------------------------------------------------
-//  Color picker UI (saturation/value square + hue strip + hex box)
+//  Color picker UI
 // ---------------------------------------------------------------------
 const svCanvas = byId('sv');
 const svCtx = svCanvas.getContext('2d');
@@ -125,7 +141,6 @@ function drawHueStrip() {
     hueCtx.fillStyle = `rgb(${r},${g},${b})`;
     hueCtx.fillRect(x, 0, 1, 16);
   }
-  // Marker: white bar with a black center line
   const markerX = hue / 360 * 208;
   hueCtx.fillStyle = '#fff';
   hueCtx.fillRect(markerX - 2, 0, 4, 16);
@@ -144,8 +159,6 @@ function drawSatValSquare() {
     }
   }
   svCtx.putImageData(image, 0, 0);
-
-  // Crosshair ring (white inside, black outside)
   const cx = sat * 208, cy = (1 - val) * 160;
   svCtx.strokeStyle = '#fff'; svCtx.lineWidth = 2;
   svCtx.beginPath(); svCtx.arc(cx, cy, 6, 0, 7); svCtx.stroke();
@@ -153,8 +166,6 @@ function drawSatValSquare() {
   svCtx.beginPath(); svCtx.arc(cx, cy, 7.5, 0, 7); svCtx.stroke();
 }
 
-// Refresh everything that depends on the picker position.
-// `fromHexBox` = true when the change came from typing, so we don't overwrite the text box.
 function syncPicker(fromHexBox) {
   selectedColor = pickerToHex3();
   byId('sw').style.background = '#' + selectedColor;
@@ -188,7 +199,6 @@ svCanvas.onpointerdown = e => {
 };
 svCanvas.onpointerup = () => svCanvas.onpointermove = null;
 
-// Move the picker to a given 3-digit hex color
 function setPickerFromHex3(hex3) {
   const [r, g, b] = hex3.split('').map(ch => parseInt(ch + ch, 16));
   [hue, sat, val] = rgbToHsv(r, g, b);
@@ -199,13 +209,13 @@ byId('hex').oninput = e => {
   const typed = e.target.value.replace('#', '');
   if (/^[0-9a-f]{3}$/i.test(typed)) {
     setPickerFromHex3(typed.toLowerCase());
-    byId('hex').value = e.target.value; // keep exactly what the user typed
+    byId('hex').value = e.target.value;
   }
 };
 byId('hex').onblur = () => byId('hex').value = '#' + selectedColor;
 
 // ---------------------------------------------------------------------
-//  Click-mode buttons ("Add color tag" / "Add </font> tag")
+//  Click-mode buttons
 // ---------------------------------------------------------------------
 function setClickMode(newMode) {
   clickMode = newMode;
@@ -216,49 +226,84 @@ byId('mColor').onclick = () => setClickMode('color');
 byId('mClose').onclick = () => setClickMode('close');
 
 // ---------------------------------------------------------------------
+//  Nesting slider (painter) — syncs with the importer's slider
+// ---------------------------------------------------------------------
+function setNestingLimit(n) {
+  nestingLimit = Math.max(0, Math.min(8, n | 0));
+  byId('nest').value = nestingLimit;
+  byId('nest2').value = nestingLimit;
+  byId('nestVal').textContent = nestingLimit;
+  byId('nestTags').textContent = getMaxOpen();
+  renderPainter();
+  if (sourceImage) recomputeImport();
+}
+byId('nest').oninput = e => setNestingLimit(+e.target.value);
+byId('nest2').oninput = e => setNestingLimit(+e.target.value);
+
+// ---------------------------------------------------------------------
+//  Overlap mode
+// ---------------------------------------------------------------------
+function setOverlapMode(on) {
+  if (overlapMode === on) return;
+  overlapMode = on;
+  const newCount = getTileCount();
+  const oldCount = tiles.length;
+  if (oldCount !== newCount) {
+    const old = tiles;
+    tiles = Array.from({ length: newCount }, (_, i) =>
+      old[i] ? { color: old[i].color, closes: old[i].closes || 0 }
+             : { color: null, closes: 0 });
+    rebuildPaper();
+  }
+  if (byId('ovl').checked !== on) byId('ovl').checked = on;
+  updatePaperLayout();
+  renderPainter();
+}
+byId('ovl').onchange = e => setOverlapMode(e.target.checked);
+
+// ---------------------------------------------------------------------
 //  Build the rich-text string from a list of tiles
 //
 //  Simulates a stack of open <font> tags. Each stack entry is
-//      { hasFace: does this tag declare face='Legacy'?, color: 3-hex or null }
+//  { hasFace, color }. Root entry has face but no color.
 //
 //  Returns:
-//      text       the final string (what goes into the game)
-//      tileInfo   per-tile display info:
-//                   effectiveColor  color shown on the tile (outermost color tag)
-//                   innermostColor  color of the innermost open color tag
-//                   ignored         true if a close+reopen of the same color was dropped
-//                   hasLegacyFace   false if the tile lost the Legacy font
-//      wastedTags number of color tags nested inside another color tag
+//    text       final string
+//    tileInfo   per-tile display info:
+//                 effectiveColor (innermost open color)
+//                 ignored        (close+reopen same color dropped)
+//                 hasLegacyFace  (face still active)
+//                 depth          (number of open color tags at this tile)
+//    wastedTags number of color tags nested inside another color tag
 // ---------------------------------------------------------------------
 function buildOutput(tileList = tiles) {
   const rootTag = { hasFace: true, color: null };
   const stack = [rootTag];
 
-  // Optimization: if the paper has exactly one color tag, and it is on tile 1,
-  // fold it into the opening tag as a color='...' attribute.
   const mergeFirstColor =
+    tileList.length > 0 &&
     !!tileList[0].color &&
-    !tileList[0].close &&
-    tileList.filter(t => t.color).length == 1;
+    (tileList[0].closes || 0) === 0 &&
+    tileList.filter(t => t.color).length === 1;
   if (mergeFirstColor) rootTag.color = tileList[0].color;
 
-  let text = "<font face='Legacy'" + (mergeFirstColor ? 'color=' + quoteColor(rootTag.color) : '') + '>';
+  let text = "<font face='Legacy'" + (mergeFirstColor ? 'color=' + quoteColor(rootTag.color) : '') + '><stroke th=5>';
   let wastedTags = 0;
   const tileInfo = [];
 
   tileList.forEach((tile, index) => {
     const topOfStack = stack[stack.length - 1];
+    const closes = tile.closes || 0;
 
-    // Closing a color and immediately reopening the same one does nothing – skip both.
-    const ignored = tile.close && !!tile.color && !!topOfStack && topOfStack.color === tile.color;
+    // Close + reopen of the exact same color on a single tile does nothing.
+    const ignored = closes === 1 && !!tile.color && !!topOfStack && topOfStack.color === tile.color;
 
     if (!ignored) {
-      if (tile.close && stack.length) {
+      for (let c = 0; c < closes && stack.length > 1; c++) {
         stack.pop();
         text += '</font>';
       }
-      if (tile.color && !(index == 0 && mergeFirstColor)) {
-        // Re-declare the face only if no open tag still provides it
+      if (tile.color && !(index === 0 && mergeFirstColor)) {
         const needsFace = !stack.some(entry => entry.hasFace);
         if (stack.some(entry => entry.color)) wastedTags++;
         stack.push({ hasFace: needsFace, color: tile.color });
@@ -267,15 +312,17 @@ function buildOutput(tileList = tiles) {
     }
 
     text += '@';
+    if (overlapMode && (index + 1) % getColsPerPaper() === 0) text += '\n';
 
-    // Which color will this tile actually render in?
-    const effectiveColor = (stack.find(entry => entry.color) || {}).color || null;
-    const innermostColor = ([...stack].reverse().find(entry => entry.color) || {}).color || null;
+    // Effective color is the innermost open color tag.
+    const openColors = stack.filter(entry => entry.color);
+    const depth = openColors.length;
+    const effectiveColor = depth > 0 ? openColors[depth - 1].color : null;
     tileInfo.push({
       effectiveColor,
-      innermostColor,
       ignored,
       hasLegacyFace: stack.some(entry => entry.hasFace),
+      depth,
     });
   });
 
@@ -283,71 +330,86 @@ function buildOutput(tileList = tiles) {
 }
 
 // ---------------------------------------------------------------------
-//  Painter: create the 80 tile elements
-//  Left-click  : apply the current mode (toggle color tag / toggle close)
-//  Right-click : toggle close
-//  Middle-click: pick the color under the cursor
+//  Painter tile DOM
 // ---------------------------------------------------------------------
 const paperElement = byId('paper');
 
-tiles.forEach((_, index) => {
-  const tileEl = document.createElement('div');
-  tileEl.className = 'tile';
-  tileEl.innerHTML = '<canvas class="at" width="112" height="132"></canvas>';
+function rebuildPaper() {
+  paperElement.innerHTML = '';
+  paperElement.style.gridTemplateColumns = `repeat(${getColsPerPaper()},minmax(0,1fr))`;
+  tiles.forEach((_, index) => {
+    const tileEl = document.createElement('div');
+    tileEl.className = 'tile';
+    tileEl.innerHTML = '<canvas class="at" width="112" height="132"></canvas>';
 
-  tileEl.onmousedown = e => e.preventDefault();
-  tileEl.onmouseup = e => {
-    const tile = tiles[index];
-    if (e.button == 0) {                       // left
-      if (clickMode == 'color') tile.color = (tile.color === selectedColor) ? null : selectedColor;
-      else tile.close = !tile.close;
-    } else if (e.button == 2) {                // right
-      tile.close = !tile.close;
-    } else if (e.button == 1) {                // middle: eyedropper
-      const picked = tile.color || lastBuild.tileInfo[index].innermostColor;
-      if (picked) setPickerFromHex3(picked);
-    }
-    renderPainter();
-  };
-  tileEl.oncontextmenu = e => e.preventDefault();
+    tileEl.onmousedown = e => e.preventDefault();
+    tileEl.onmouseup = e => {
+      const tile = tiles[index];
+      if (!tile) return;
+      if (e.button === 0) {
+        if (clickMode === 'color') {
+          tile.color = (tile.color === selectedColor) ? null : selectedColor;
+        } else {
+          tile.closes = (tile.closes || 0) > 0 ? 0 : 1;
+        }
+      } else if (e.button === 2) {
+        // Cycle 0..9 closes
+        tile.closes = ((tile.closes || 0) + 1) % 10;
+      } else if (e.button === 1) {
+        const picked = tile.color || (lastBuild && lastBuild.tileInfo[index].effectiveColor);
+        if (picked) setPickerFromHex3(picked);
+      }
+      renderPainter();
+    };
+    tileEl.oncontextmenu = e => e.preventDefault();
 
-  paperElement.appendChild(tileEl);
-});
+    paperElement.appendChild(tileEl);
+  });
+}
 
 // ---------------------------------------------------------------------
-//  Painter: redraw tiles, output text and statistics
+//  Painter redraw + stats
 // ---------------------------------------------------------------------
 function renderPainter() {
   lastBuild = buildOutput();
   const { text, tileInfo, wastedTags } = lastBuild;
+  const maxOpen = getMaxOpen();
 
   [...paperElement.children].forEach((tileEl, index) => {
     const tile = tiles[index];
+    if (!tile) return;
     const info = tileInfo[index];
 
     tileEl.classList.toggle('nf', !info.hasLegacyFace);
+    tileEl.classList.toggle('deep', info.depth > maxOpen);
 
-    // Draw the '@' in the tile's effective color (black if none)
     const g = tileEl.firstChild.getContext('2d');
     g.clearRect(0, 0, 112, 132);
     drawAtGlyph(g, 56, 66, 110, 122, hex3ToCss(info.effectiveColor));
 
-    // Overlay badges: color code, close marker, ignored warning
-    tileEl.querySelectorAll('.code,.cl,.warn').forEach(node => node.remove());
-    if (tile.color) tileEl.insertAdjacentHTML('beforeend', `<div class="code">${tile.color}</div>`);
-    if (tile.close) tileEl.insertAdjacentHTML('beforeend', '<div class="cl">&lt;/&gt;</div>');
+    tileEl.querySelectorAll('.code,.cl,.warn,.dp').forEach(node => node.remove());
+
+    if (tile.color) {
+      tileEl.insertAdjacentHTML('beforeend', `<div class="code">${tile.color}</div>`);
+    }
+    if (tile.closes) {
+      const label = tile.closes === 1 ? '&lt;/&gt;' : `×${tile.closes}`;
+      tileEl.insertAdjacentHTML('beforeend', `<div class="cl">${label}</div>`);
+    }
     if (info.ignored) {
       tileEl.insertAdjacentHTML('beforeend',
-        '<div class="warn" title="This color tag is ignored as it does not effect the output.">⚠</div>');
+        '<div class="warn" title="This close+reopen pair is dropped because the color does not change.">⚠</div>');
     }
+    // Depth badge in the top-right corner
+    const depthClass = info.depth > maxOpen ? 'dp over' : 'dp';
+    tileEl.insertAdjacentHTML('beforeend', `<div class="${depthClass}">${info.depth}</div>`);
   });
 
   byId('out').value = text;
 
-  // Statistics panel
-  const CHARS_PER_COLOR_CHANGE = 26; // "</font>" (7) + "<font color='#xyz'>" (19)
   const used = text.length;
   const left = CHAR_LIMIT - used;
+  const currentMaxDepth = tileInfo.reduce((m, t) => Math.max(m, t.depth), 0);
 
   byId('used').textContent = used + ' / ' + CHAR_LIMIT;
   byId('used').className = used > CHAR_LIMIT ? 'bad' : '';
@@ -355,20 +417,37 @@ function renderPainter() {
   byId('left').textContent = left;
   byId('left').className = left < 0 ? 'bad' : '';
 
-  byId('fit').textContent = Math.max(0, Math.floor(left / CHARS_PER_COLOR_CHANGE));
-  byId('max').textContent =
-    1 + Math.floor((CHAR_LIMIT - TILE_COUNT - "<font face='Legacy'>".length) / CHARS_PER_COLOR_CHANGE);
+  // How many more changes fit, assuming we can nest `headroom` more times
+  const headroom = Math.max(0, maxOpen - currentMaxDepth);
+  let fitCount = 0, rem = Math.max(0, left);
+  const nested = Math.min(headroom, Math.floor(rem / 19));
+  fitCount += nested;
+  rem -= nested * 19;
+  fitCount += Math.floor(rem / 26);
+  byId('fit').textContent = fitCount;
+
+  // Max color changes on an empty page
+  const emptyBudget = Math.max(0, CHAR_LIMIT - baseCharCount());
+  const emptyNested = Math.min(maxOpen, Math.floor(emptyBudget / 19));
+  const emptyMore = emptyNested < maxOpen ? 0 : Math.floor((emptyBudget - emptyNested * 19) / 26);
+  byId('max').textContent = emptyNested + emptyMore;
 
   byId('waste').textContent = wastedTags;
-  byId('waste').className = wastedTags ? 'bad' : '';
+  byId('waste').className = wastedTags ? '' : '';
+
+  byId('depth').textContent = currentMaxDepth + ' / ' + maxOpen;
+  byId('depth').className = currentMaxDepth > maxOpen ? 'bad' : '';
 
   const tilesWithoutFont = tileInfo.filter(info => !info.hasLegacyFace).length;
   byId('nof').textContent = tilesWithoutFont;
   byId('nof').className = tilesWithoutFont ? 'bad' : '';
 }
 
+// ---------------------------------------------------------------------
+//  Painter toolbar
+// ---------------------------------------------------------------------
 byId('reset').onclick = () => {
-  tiles.forEach(tile => { tile.color = null; tile.close = false; });
+  tiles.forEach(tile => { tile.color = null; tile.closes = 0; });
   renderPainter();
 };
 
@@ -388,45 +467,37 @@ byId('copy').onclick = async () => {
 //  IMAGE IMPORTER
 // =====================================================================
 
-// ---------------------------------------------------------------------
-//  Importer state
-// ---------------------------------------------------------------------
-const VIEW_W = byId('ic').width;     // size of the crop-editor canvas
+const VIEW_W = byId('ic').width;
 const VIEW_H = byId('ic').height;
 const cropCanvas = byId('ic');
 const cropCtx = cropCanvas.getContext('2d');
 
-let cropAspect = 660 / 448;  // crop height / crop width (depends on paper count & rotation)
-let sourceImage = null;      // { w, h, canvas, data } once an image is loaded
-let crop = { x: 0, y: 0, w: 100, h: 100 }; // crop rectangle in source-image pixels
-let viewScale = 1;           // source-image pixel -> editor canvas pixel
-let viewOffsetX = 0;         // where the image's top-left sits on the editor canvas
+let cropAspect = 660 / 448;
+let sourceImage = null;
+let crop = { x: 0, y: 0, w: 100, h: 100 };
+let viewScale = 1;
+let viewOffsetX = 0;
 let viewOffsetY = 0;
-let dragState = null;        // active pan/resize drag, or null
-let redrawHandle = 0;        // requestAnimationFrame id
-let lastResults = null;      // per-paper results of the latest compute()
-let paperRotation = 0;       // quarter turns clockwise (0-3)
+let dragState = null;
+let redrawHandle = 0;
+let lastResults = null;
+let paperRotation = 0;
 
-// Snap an 8-bit channel to a multiple of 17 (one hex digit)
 const quantizeChannel = v => Math.round(v / 17) * 17;
-// [r,g,b] (already multiples of 17) -> "rgb" 3-digit hex string
 const rgbToHex3 = rgb => rgb.map(v => (v / 17).toString(16)).join('');
 
-// Number of papers across / down (1x1 unless "Multi-paper" is ticked). No upper limit.
 const papersWide = () => byId('mp').checked ? Math.max(1, Math.floor(+byId('pw').value) || 1) : 1;
 const papersTall = () => byId('mp').checked ? Math.max(1, Math.floor(+byId('ph').value) || 1) : 1;
 
-// Map a point (u,v) in 0-1 "paper space" to the matching point in the
-// un-rotated crop rectangle, according to the paper rotation.
+// Map (u,v) in paper space to the un-rotated crop rectangle
 const rotateUV = (u, v) => [[u, v], [1 - v, u], [1 - u, 1 - v], [v, 1 - u]][paperRotation];
 
 // ---------------------------------------------------------------------
-//  Loading images
+//  Image loading
 // ---------------------------------------------------------------------
 function loadImage(file) {
   const htmlImage = new Image();
   htmlImage.onload = () => {
-    // Downscale anything bigger than 1200px to keep sampling fast
     const downscale = Math.min(1, 1200 / Math.max(htmlImage.width, htmlImage.height));
     const canvas = document.createElement('canvas');
     canvas.width = Math.round(htmlImage.width * downscale);
@@ -444,7 +515,6 @@ function loadImage(file) {
   htmlImage.src = URL.createObjectURL(file);
 }
 
-// Reset the crop rectangle: 'fill' (cover the paper), 'fit' (show whole image), or 'stretch'
 function fitCropToImage(fitMode) {
   if (!sourceImage) return;
   let w, h;
@@ -462,7 +532,6 @@ function fitCropToImage(fitMode) {
   }
   crop = { x: (sourceImage.w - w) / 2, y: (sourceImage.h - h) / 2, w, h };
 
-  // Zoom/pan the editor view so both the image and the crop box are visible
   const boundsX = Math.min(0, crop.x);
   const boundsY = Math.min(0, crop.y);
   const boundsW = Math.max(sourceImage.w, crop.x + w) - boundsX;
@@ -474,7 +543,6 @@ function fitCropToImage(fitMode) {
   syncCropInputs();
 }
 
-// Copy crop values into the X/Y/W/H boxes (unless the user is typing in one) and redraw
 function syncCropInputs() {
   ['x', 'y', 'w', 'h'].forEach(key => {
     const input = byId('c' + key);
@@ -483,7 +551,6 @@ function syncCropInputs() {
   scheduleRedraw();
 }
 
-// Coalesce many changes into one redraw + recompute per animation frame
 function scheduleRedraw() {
   cancelAnimationFrame(redrawHandle);
   redrawHandle = requestAnimationFrame(() => {
@@ -506,16 +573,13 @@ function drawCropEditor() {
     return;
   }
 
-  // The image itself
   cropCtx.drawImage(sourceImage.canvas, viewOffsetX, viewOffsetY, sourceImage.w * viewScale, sourceImage.h * viewScale);
 
-  // Crop rectangle in editor-canvas coordinates
   const rectX = viewOffsetX + crop.x * viewScale;
   const rectY = viewOffsetY + crop.y * viewScale;
   const rectW = crop.w * viewScale;
   const rectH = crop.h * viewScale;
 
-  // Darken everything outside the crop rectangle
   cropCtx.fillStyle = '#000a';
   cropCtx.beginPath();
   cropCtx.rect(0, 0, VIEW_W, VIEW_H);
@@ -525,9 +589,9 @@ function drawCropEditor() {
   cropCtx.lineWidth = 2;
   cropCtx.strokeRect(rectX, rectY, rectW, rectH);
 
-  // Grid size. "paper" grid is rotated when paperRotation is odd, so swap for display.
   const wide = papersWide(), tall = papersTall();
-  const gridCols = 8 * wide, gridRows = 10 * tall;
+  const ppCols = getColsPerPaper(), ppRows = getRowsPerPaper();
+  const gridCols = ppCols * wide, gridRows = ppRows * tall;
   const isSideways = paperRotation & 1;
   const shownCols = isSideways ? gridRows : gridCols;
   const shownRows = isSideways ? gridCols : gridRows;
@@ -547,15 +611,12 @@ function drawCropEditor() {
     cropCtx.stroke();
   };
 
-  // Faint tile grid (only if tiles are big enough to be useful)
   if (rectW / shownCols > 5 && rectH / shownRows > 5) drawGridLines(shownCols, shownRows, '#fff4', 1);
-  // Yellow lines between papers
   if (wide * tall > 1) {
     if (isSideways) drawGridLines(tall, wide, '#ffd24a', 2.5);
     else drawGridLines(wide, tall, '#ffd24a', 2.5);
   }
 
-  // Yellow dots showing where "Nearest pixel" sampling reads each tile
   if (byId('meth').value == 'near' && Math.min(rectW / shownCols, rectH / shownRows) > 8) {
     cropCtx.fillStyle = '#ff0';
     const fracX = byId('sx').value / 100;
@@ -568,7 +629,6 @@ function drawCropEditor() {
     }
   }
 
-  // Orange "TOP" edge marker so you can see the paper's orientation
   {
     const edges = [
       [rectX, rectY, rectX + rectW, rectY],
@@ -594,15 +654,13 @@ function drawCropEditor() {
     cropCtx.fillText('TOP', (edge[0] + edge[2]) / 2 + offset[0], (edge[1] + edge[3]) / 2 + offset[1]);
   }
 
-  // Resize handle (bottom-right corner)
   cropCtx.fillStyle = '#5b9cff';
   cropCtx.fillRect(rectX + rectW - 8, rectY + rectH - 8, 16, 16);
 }
 
 // ---------------------------------------------------------------------
-//  Crop editor interaction: drag = pan, corner = resize, wheel = zoom
+//  Crop editor interaction
 // ---------------------------------------------------------------------
-// Mouse event -> editor-canvas coordinates
 const canvasPoint = e => {
   const rect = cropCanvas.getBoundingClientRect();
   return [(e.clientX - rect.left) * VIEW_W / rect.width, (e.clientY - rect.top) * VIEW_H / rect.height];
@@ -636,7 +694,6 @@ cropCanvas.onpointermove = e => {
 
 cropCanvas.onpointerup = () => dragState = null;
 
-// Zoom the crop box around its center
 cropCanvas.onwheel = e => {
   if (!sourceImage) return;
   e.preventDefault();
@@ -650,7 +707,6 @@ cropCanvas.onwheel = e => {
   syncCropInputs();
 };
 
-// Drag & drop / paste / file picker
 cropCanvas.ondragover = e => e.preventDefault();
 cropCanvas.ondrop = e => {
   e.preventDefault();
@@ -667,7 +723,6 @@ byId('bFill').onclick = () => fitCropToImage('fill');
 byId('bFit').onclick = () => fitCropToImage('fit');
 byId('bStr').onclick = () => fitCropToImage('stretch');
 
-// Typing into the X / Y / W / H boxes
 ['x', 'y', 'w', 'h'].forEach(key => {
   byId('c' + key).oninput = e => {
     const value = +e.target.value;
@@ -683,14 +738,13 @@ byId('bStr').onclick = () => fitCropToImage('stretch');
   };
 });
 
-// Any settings change: multi-paper controls rebuild the layout, everything else just recomputes
 document.querySelector('.imp').addEventListener('input', e => {
   if (['mp', 'pw', 'ph'].includes(e.target.id)) updatePaperLayout();
   else scheduleRedraw();
 });
 
 // ---------------------------------------------------------------------
-//  Paper layout (multi-paper grid + rotation)
+//  Paper layout
 // ---------------------------------------------------------------------
 byId('pL').onclick = () => { paperRotation = (paperRotation + 3) % 4; updatePaperLayout(); };
 byId('pR').onclick = () => { paperRotation = (paperRotation + 1) % 4; updatePaperLayout(); };
@@ -699,14 +753,16 @@ function updatePaperLayout() {
   const wide = papersWide(), tall = papersTall();
   const previouslySelected = +byId('psel').value || 0;
 
-  // One paper is 448 x 660 px; the crop aspect depends on the paper grid and rotation
+  // Used area of one paper (in pixels) depends on the tile grid
+  const usedW = getColsPerPaper() * 56;
+  const usedH = getRowsPerPaper() * 66;
+
   cropAspect = (paperRotation & 1)
-    ? wide * 448 / (tall * 660)
-    : tall * 660 / (wide * 448);
+    ? wide * usedW / (tall * usedH)
+    : tall * usedH / (wide * usedW);
 
   byId('pw').disabled = byId('ph').disabled = !byId('mp').checked;
 
-  // Rebuild the "paper shown in editor" dropdown
   byId('psel').innerHTML = Array.from({ length: wide * tall }, (_, k) =>
     `<option value="${k}">Row ${(k / wide | 0) + 1}, Col ${k % wide + 1}</option>`).join('');
   byId('psel').value = previouslySelected < wide * tall ? previouslySelected : 0;
@@ -717,7 +773,6 @@ function updatePaperLayout() {
   else scheduleRedraw();
 }
 
-// Rotate the source image itself by 90 degrees (direction: -1 = left, 1 = right)
 function rotateImage(direction) {
   if (!sourceImage) return;
   const canvas = document.createElement('canvas');
@@ -739,8 +794,7 @@ byId('rL').onclick = () => rotateImage(-1);
 byId('rR').onclick = () => rotateImage(1);
 
 // ---------------------------------------------------------------------
-//  Color adjustments (brightness / contrast / saturation sliders)
-//  Takes and returns an [r,g,b] array with values 0-255.
+//  Color adjustments
 // ---------------------------------------------------------------------
 function applyColorAdjustments(rgb) {
   const brightness = byId('br').value * 2.55;
@@ -756,12 +810,12 @@ function applyColorAdjustments(rgb) {
 }
 
 // ---------------------------------------------------------------------
-//  Sample the image: one [r,g,b] color per tile, for the whole paper grid
-//  Returned in row-major order across ALL papers (cols = 8 * papersWide).
+//  Sample the image: one [r,g,b] per tile across ALL papers
 // ---------------------------------------------------------------------
 function sampleTileColors() {
-  const gridCols = 8 * papersWide();
-  const gridRows = 10 * papersTall();
+  const ppCols = getColsPerPaper(), ppRows = getRowsPerPaper();
+  const gridCols = ppCols * papersWide();
+  const gridRows = ppRows * papersTall();
   const background = [1, 3, 5].map(i => parseInt(byId('bg').value.substr(i, 2), 16));
   const method = byId('meth').value;
   const fracX = byId('sx').value / 100;
@@ -769,7 +823,6 @@ function sampleTileColors() {
   const pixelData = sourceImage.data;
   const colors = [];
 
-  // Read one source pixel, blending transparency (and out-of-bounds) with the background color
   const readPixel = (x, y) => {
     if (x < 0 || y < 0 || x >= sourceImage.w || y >= sourceImage.h) return background;
     const i = (y * sourceImage.w + x) * 4;
@@ -779,7 +832,6 @@ function sampleTileColors() {
 
   for (let row = 0; row < gridRows; row++) {
     for (let col = 0; col < gridCols; col++) {
-      // (u,v) in paper space -> pixel coordinates in the source image (respecting rotation)
       const toImagePoint = (u, v) => {
         const [U, V] = rotateUV(u, v);
         return [crop.x + U * crop.w, crop.y + V * crop.h];
@@ -794,12 +846,10 @@ function sampleTileColors() {
       let sumR = 0, sumG = 0, sumB = 0, count = 0;
 
       if (method == 'near') {
-        // Single pixel at the chosen position inside the tile
         const point = toImagePoint((col + fracX) / gridCols, (row + fracY) / gridRows);
         [sumR, sumG, sumB] = readPixel(Math.floor(point[0]), Math.floor(point[1]));
         count = 1;
       } else {
-        // Average over the tile's area (at most ~16x16 samples)
         const xStart = Math.floor(left);
         const xEnd = Math.max(xStart + 1, Math.ceil(left + tileW));
         const yStart = Math.floor(top);
@@ -823,29 +873,29 @@ function sampleTileColors() {
 // ---------------------------------------------------------------------
 //  Optimal color-run solver (dynamic programming)
 //
-//  Splits the 80 tiles of one paper into consecutive "runs". Each run is
-//  either uncolored (black/default) or colored with one quantized color.
-//  Goal: minimize total squared color error while keeping the extra
-//  characters under the budget.
+//  Splits the N tiles of one paper into consecutive runs. Each run is
+//  either uncolored (black) or colored with one quantized color. Goal:
+//  minimize squared color error while staying inside the character
+//  budget and the nesting limit.
 //
-//  DP state (j, cost, type):
-//      j     tiles 0..j-1 are already covered
+//  DP state: (j, cost, type, depth)
+//      j     tiles 0..j-1 already covered
 //      cost  extra characters spent so far
 //      type  1 if the last run was colored, 0 if not
-//  dp[state] = lowest error that reaches that state.
+//      depth number of open color tags at position j
 //
-//  Extra character costs used:
-//      19  opening a colored tag:  <font color='#xyz'>
-//       7  closing a colored run:  </font>
-//      26  close + open (colored run directly after a colored run)
+//  dp[state] = lowest error reaching that state.
 //
-//  Returns { tileSettings, runs, totalError, colorTagCount } where
-//  tileSettings is a list of 80 { color, close } objects for the painter.
+//  Transition costs:
+//    colored run, depth < maxOpen   -> 19 (nest, depth + 1)
+//    colored run, depth == maxOpen  -> 26 (close one + open, depth stays)
+//    uncolored run, from colored    -> 7 * depth (close all, depth = 0)
 // ---------------------------------------------------------------------
 function solveColorRuns(tileColors) {
   const method = byId('meth').value;
+  const n = tileColors.length;
+  const maxOpen = getMaxOpen();
 
-  // Prefix sums so any run's average color / squared error is O(1)
   const prefixR = [0], prefixG = [0], prefixB = [0], prefixSquares = [0];
   tileColors.forEach(c => {
     prefixR.push(prefixR.at(-1) + c[0]);
@@ -854,33 +904,33 @@ function solveColorRuns(tileColors) {
     prefixSquares.push(prefixSquares.at(-1) + c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
   });
 
-  // Character budget beyond the ~100 baseline (opening tag + 80 '@')
-  const maxExtraChars = Math.max(0, Math.min(400, +byId('bud').value || 400) - 100);
+  const maxExtraChars = Math.max(0, (+byId('bud').value || 400) - baseCharCount());
   const costSlots = maxExtraChars + 1;
+  const depthSlots = maxOpen + 1;
   const INFINITY = 1e18;
-  const stateCount = 81 * costSlots * 2;
+  const stateCount = (n + 1) * costSlots * 2 * depthSlots;
 
   const bestError = new Float64Array(stateCount).fill(INFINITY);
-  const prevStart = new Int16Array(stateCount);  // where the run ending in this state began
-  const prevCost = new Int16Array(stateCount);   // cost of the state before that run
-  const prevType = new Int8Array(stateCount);    // type of the state before that run
-  const stateIndex = (j, cost, type) => (j * costSlots + cost) * 2 + type;
+  const prevStart = new Int16Array(stateCount);
+  const prevCost = new Int16Array(stateCount);
+  const prevType = new Int8Array(stateCount);
+  const prevDepth = new Int8Array(stateCount);
 
-  // Quantized color to use for a colored run covering tiles [start, end)
+  const stateIndex = (j, cost, type, depth) =>
+    ((j * costSlots + cost) * 2 + type) * depthSlots + depth;
+
   const runColor = (start, end) =>
     method == 'run'
-      ? [prefixR, prefixG, prefixB].map(prefix => quantizeChannel((prefix[end] - prefix[start]) / (end - start)))
+      ? [prefixR, prefixG, prefixB].map(p => quantizeChannel((p[end] - p[start]) / (end - start)))
       : tileColors[start].map(quantizeChannel);
 
-  for (let end = 1; end <= TILE_COUNT; end++) {
+  for (let end = 1; end <= n; end++) {
     for (let start = 0; start < end; start++) {
       const length = end - start;
       const sumSquares = prefixSquares[end] - prefixSquares[start];
       const color = runColor(start, end);
 
-      // Error if this run is uncolored (compared against black)
       const errorUncolored = sumSquares;
-      // Error if colored: sum |c - m|^2 = sum c^2 - 2 m.sum(c) + n m^2
       const errorColored =
         sumSquares
         - 2 * (color[0] * (prefixR[end] - prefixR[start])
@@ -888,69 +938,95 @@ function solveColorRuns(tileColors) {
              + color[2] * (prefixB[end] - prefixB[start]))
         + length * (color[0] * color[0] + color[1] * color[1] + color[2] * color[2]);
 
-      // Record a transition into state (end, newCost, type) if it beats the current best
-      const relax = (newCost, type, error, fromCost, fromType) => {
+      const relax = (newCost, type, depth, error, fromCost, fromType, fromDepth) => {
         if (newCost > maxExtraChars) return;
-        const k = stateIndex(end, newCost, type);
+        if (depth > maxOpen) return;
+        const k = stateIndex(end, newCost, type, depth);
         if (error < bestError[k]) {
           bestError[k] = error;
           prevStart[k] = start;
           prevCost[k] = fromCost;
           prevType[k] = fromType;
+          prevDepth[k] = fromDepth;
         }
       };
 
-      if (start == 0) {
-        // First run on the paper
-        relax(0, 0, errorUncolored, 0, 0);
-        relax(19, 1, errorColored, 0, 0);
+      if (start === 0) {
+        // First run: either uncolored (cost 0) or colored (cost 19, depth 1)
+        relax(0, 0, 0, errorUncolored, 0, 0, 0);
+        relax(19, 1, 1, errorColored, 0, 0, 0);
       } else {
-        // Extend every reachable earlier state with this run
         for (let cost = 0; cost <= maxExtraChars; cost++) {
           for (let lastType = 0; lastType < 2; lastType++) {
-            const errorSoFar = bestError[stateIndex(start, cost, lastType)];
-            if (errorSoFar >= INFINITY) continue;
+            for (let lastDepth = 0; lastDepth <= maxOpen; lastDepth++) {
+              const errorSoFar = bestError[stateIndex(start, cost, lastType, lastDepth)];
+              if (errorSoFar >= INFINITY) continue;
 
-            // Uncolored run: only useful right after a colored one (needs </font>)
-            if (lastType == 1) relax(cost + 7, 0, errorSoFar + errorUncolored, cost, lastType);
-            // Colored run: +26 if it follows a colored run (close + open), else +19
-            relax(cost + (lastType ? 26 : 19), 1, errorSoFar + errorColored, cost, lastType);
+              // Uncolored run: close all open color tags
+              if (lastType === 1) {
+                relax(cost + 7 * lastDepth, 0, 0, errorSoFar + errorUncolored, cost, lastType, lastDepth);
+              }
+
+              // Colored run: nest if room, otherwise close one and open
+              let openCost, newDepth;
+              if (lastDepth < maxOpen) {
+                openCost = 19;
+                newDepth = lastDepth + 1;
+              } else {
+                openCost = 26;
+                newDepth = maxOpen;
+              }
+              relax(cost + openCost, 1, newDepth, errorSoFar + errorColored, cost, lastType, lastDepth);
+            }
           }
         }
       }
     }
   }
 
-  // Pick the cheapest-error final state (any cost within budget)
+  // Pick the best final state (any cost, any type, any depth)
   let bestState = -1, bestTotal = INFINITY;
   for (let cost = 0; cost <= maxExtraChars; cost++) {
     for (let type = 0; type < 2; type++) {
-      const error = bestError[stateIndex(TILE_COUNT, cost, type)];
-      if (error < bestTotal) {
-        bestTotal = error;
-        bestState = stateIndex(TILE_COUNT, cost, type);
+      for (let depth = 0; depth <= maxOpen; depth++) {
+        const error = bestError[stateIndex(n, cost, type, depth)];
+        if (error < bestTotal) {
+          bestTotal = error;
+          bestState = stateIndex(n, cost, type, depth);
+        }
       }
     }
   }
 
-  // Walk backwards through the stored transitions to recover the runs: [start, end, type]
+  // Reconstruct the runs: [start, end, type, depthAfter]
   const runs = [];
-  for (let end = TILE_COUNT, k = bestState; end > 0;) {
+  for (let end = n, k = bestState; end > 0;) {
     const start = prevStart[k];
-    runs.unshift([start, end, k % 2]);
-    k = stateIndex(start, prevCost[k], prevType[k]);
+    const type = Math.floor(k / depthSlots) % 2;
+    const depthAfter = k % depthSlots;
+    runs.unshift([start, end, type, depthAfter]);
+    k = stateIndex(start, prevCost[k], prevType[k], prevDepth[k]);
     end = start;
   }
 
-  // Convert runs into per-tile painter settings
-  const tileSettings = Array.from({ length: TILE_COUNT }, () => ({ color: null, close: false }));
-  runs.forEach(([start, end, type], runIndex) => {
-    const previousRun = runs[runIndex - 1];
-    if (type == 1) {
+  // Convert runs into tile settings
+  const tileSettings = Array.from({ length: n }, () => ({ color: null, closes: 0 }));
+  runs.forEach(([start, end, type, depthAfter], idx) => {
+    const prevRun = runs[idx - 1];
+    const prevType = prevRun ? prevRun[2] : 0;
+    const prevDepth = prevRun ? prevRun[3] : 0;
+
+    if (type === 1) {
       tileSettings[start].color = rgbToHex3(runColor(start, end));
-      if (previousRun && previousRun[2] == 1) tileSettings[start].close = true;
-    } else if (previousRun) {
-      tileSettings[start].close = true;
+      // Close before opening only when we were already at the limit
+      if (prevType === 1 && depthAfter === prevDepth) {
+        tileSettings[start].closes = 1;
+      }
+    } else {
+      // Uncolored: close everything the previous run had open
+      if (prevType === 1) {
+        tileSettings[start].closes = prevDepth;
+      }
     }
   });
 
@@ -958,26 +1034,26 @@ function solveColorRuns(tileColors) {
     tileSettings,
     runs,
     totalError: bestTotal,
-    colorTagCount: runs.filter(run => run[2]).length,
+    colorTagCount: runs.filter(run => run[2] === 1).length,
   };
 }
 
 // ---------------------------------------------------------------------
-//  Preview mosaics ("Ideal" and "Output" canvases)
-//  colorFor(paperIndex, tileIndexOnPaper) -> CSS color for that tile
+//  Preview mosaics
 // ---------------------------------------------------------------------
 function drawMosaic(canvasId, wide, tall, colorFor) {
   const canvas = byId(canvasId);
   const g = canvas.getContext('2d');
   const isSideways = paperRotation & 1;
 
+  const ppCols = getColsPerPaper(), ppRows = getRowsPerPaper();
   const cellW = isSideways ? 33 : 28;
   const cellH = isSideways ? 28 : 33;
-  const gridCols = 8 * wide, gridRows = 10 * tall;
+  const gridCols = ppCols * wide, gridRows = ppRows * tall;
   const shownCols = isSideways ? gridRows : gridCols;
   const shownRows = isSideways ? gridCols : gridRows;
-  const paperCols = isSideways ? 10 : 8;   // paper size in displayed cells (for divider lines)
-  const paperRows = isSideways ? 8 : 10;
+  const paperCols = isSideways ? ppRows : ppCols;
+  const paperRows = isSideways ? ppCols : ppRows;
 
   canvas.width = shownCols * cellW;
   canvas.height = shownRows * cellH;
@@ -989,8 +1065,8 @@ function drawMosaic(canvasId, wide, tall, colorFor) {
   for (let row = 0; row < gridRows; row++) {
     for (let col = 0; col < gridCols; col++) {
       const [u, v] = rotateUV((col + 0.5) / gridCols, (row + 0.5) / gridRows);
-      const paperIndex = (row / 10 | 0) * wide + (col / 8 | 0);
-      const tileIndex = (row % 10) * 8 + col % 8;
+      const paperIndex = (row / ppRows | 0) * wide + (col / ppCols | 0);
+      const tileIndex = (row % ppRows) * ppCols + col % ppCols;
       drawAtGlyph(
         g,
         (Math.floor(u * shownCols) + 0.5) * cellW,
@@ -1002,7 +1078,6 @@ function drawMosaic(canvasId, wide, tall, colorFor) {
     }
   }
 
-  // Dark divider lines between papers
   if (wide * tall > 1) {
     g.strokeStyle = '#555';
     g.lineWidth = 3;
@@ -1019,7 +1094,9 @@ function drawMosaic(canvasId, wide, tall, colorFor) {
   }
 }
 
-// Copy text to the clipboard and briefly flash "Copied!" on the button
+// ---------------------------------------------------------------------
+//  Clipboard helper
+// ---------------------------------------------------------------------
 async function copyToClipboard(text, button) {
   const originalLabel = button.textContent;
   try {
@@ -1037,25 +1114,24 @@ async function copyToClipboard(text, button) {
 }
 
 // ---------------------------------------------------------------------
-//  Recompute everything for the importer: sample -> solve -> build -> preview
+//  Recompute everything for the importer
 // ---------------------------------------------------------------------
 function recomputeImport() {
   if (!sourceImage) { lastResults = null; return; }
 
   const wide = papersWide(), tall = papersTall();
-  const gridCols = 8 * wide;
+  const ppCols = getColsPerPaper(), ppRows = getRowsPerPaper();
+  const gridCols = ppCols * wide;
   const sampled = sampleTileColors();
   const papers = [];
   let totalError = 0, totalColorTags = 0, longestOutput = 0;
 
-  // Solve each paper independently
   for (let paperRow = 0; paperRow < tall; paperRow++) {
     for (let paperCol = 0; paperCol < wide; paperCol++) {
-      // Cut this paper's 8x10 tiles out of the full grid
       const tileColors = [];
-      for (let r = 0; r < 10; r++) {
-        for (let c = 0; c < 8; c++) {
-          tileColors.push(sampled[(paperRow * 10 + r) * gridCols + paperCol * 8 + c]);
+      for (let r = 0; r < ppRows; r++) {
+        for (let c = 0; c < ppCols; c++) {
+          tileColors.push(sampled[(paperRow * ppRows + r) * gridCols + paperCol * ppCols + c]);
         }
       }
       const solution = solveColorRuns(tileColors);
@@ -1069,11 +1145,9 @@ function recomputeImport() {
   }
   lastResults = papers;
 
-  // Previews
   drawMosaic('gT', wide, tall, (paper, tile) => `rgb(${papers[paper].tileColors[tile].map(Math.round)})`);
   drawMosaic('gR', wide, tall, (paper, tile) => hex3ToCss(papers[paper].built.tileInfo[tile].effectiveColor));
 
-  // "Copy" buttons, laid out to match the (rotated) paper grid
   const selected = Math.min(+byId('psel').value || 0, papers.length - 1);
   const copyGrid = byId('cg');
   const shownWide = paperRotation & 1 ? tall : wide;
@@ -1095,8 +1169,8 @@ function recomputeImport() {
     });
   }
 
-  // Status line
-  const rmsError = Math.sqrt(totalError / (240 * papers.length)).toFixed(1); // 240 = 80 tiles x 3 channels
+  const totalTiles = ppCols * ppRows * papers.length;
+  const rmsError = Math.sqrt(totalError / (totalTiles * 3)).toFixed(1);
   byId('ist').textContent =
     `${papers.length} paper${papers.length > 1 ? 's' : ''} · longest ${longestOutput}/400 chars · ` +
     `${totalColorTags} color tags · RMS error ${rmsError}/255`;
@@ -1104,11 +1178,28 @@ function recomputeImport() {
   if (byId('live').checked) applyResultToPainter();
 }
 
-// Write the selected paper's result into the Note Painter tab
+// ---------------------------------------------------------------------
+//  Apply result to the painter
+// ---------------------------------------------------------------------
 function applyResultToPainter() {
   if (!lastResults) return;
+
+  // Match overlap mode to the importer so the painter uses the same layout
+  if (overlapMode !== byId('ovl').checked) {
+    setOverlapMode(byId('ovl').checked);
+  }
+
   const paper = lastResults[Math.min(+byId('psel').value || 0, lastResults.length - 1)];
-  paper.tileSettings.forEach((setting, i) => Object.assign(tiles[i], setting));
+  const n = Math.min(tiles.length, paper.tileSettings.length);
+  for (let i = 0; i < n; i++) {
+    tiles[i].color = paper.tileSettings[i].color;
+    tiles[i].closes = paper.tileSettings[i].closes;
+  }
+  // Clear any tiles the source didn't cover
+  for (let i = n; i < tiles.length; i++) {
+    tiles[i].color = null;
+    tiles[i].closes = 0;
+  }
   renderPainter();
 }
 byId('apply').onclick = applyResultToPainter;
@@ -1116,6 +1207,20 @@ byId('apply').onclick = applyResultToPainter;
 // ---------------------------------------------------------------------
 //  Startup
 // ---------------------------------------------------------------------
-updatePaperLayout();
-syncPicker();
-renderPainter();
+function init() {
+  // Build the painter's tile array and DOM using current mode
+  tiles = Array.from({ length: getTileCount() }, () => ({ color: null, closes: 0 }));
+  rebuildPaper();
+
+  // Sync sliders and picker
+  byId('nest').value = nestingLimit;
+  byId('nest2').value = nestingLimit;
+  byId('nestVal').textContent = nestingLimit;
+  byId('nestTags').textContent = getMaxOpen();
+  byId('ovl').checked = overlapMode;
+
+  syncPicker();
+  updatePaperLayout();
+  renderPainter();
+}
+init();
