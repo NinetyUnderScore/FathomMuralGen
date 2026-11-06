@@ -42,6 +42,8 @@ button.on{background:var(--acc);border-color:var(--acc);color:#fff}
 /* Tiles scale with the panel width; height follows the original 56:66 ratio */
 .paper{background:#8A8B8D;padding:12px;border-radius:6px;display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:3px;user-select:none}
 .tile{position:relative;aspect-ratio:56/66;background:#8A8B8D;border:1px solid #7a7b7d;display:flex;align-items:center;justify-content:center;font:bold 30px monospace;cursor:pointer}
+body.stroke-on .paper,body.stroke-on .tile{background:#000}
+body.stroke-on .tile{border-color:#222}
 .tile:hover{outline:2px solid var(--acc);z-index:1}
 .tile .at{position:absolute;left:0;top:0;width:100%;height:100%}.tile.nf .at{opacity:.3}
 .tile .code{position:absolute;top:1px;left:0;right:0;text-align:center;font:10px monospace;color:#222;background:#fffa;line-height:12px}
@@ -66,8 +68,18 @@ label{display:flex;gap:6px;align-items:center;margin-top:10px;font-size:12px;col
 .prevs{display:flex;gap:8px;align-items:flex-start;min-height:0}
 .prevs>div{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0;font-size:12px;color:var(--mut)}
 .prevs canvas{width:100%!important;height:auto;display:block}
+.prevs{transition:opacity .15s}
+.prevs.stale{opacity:.4}
 #ic{max-width:100%;height:auto}
 .note{background:#17171a;border:1px solid var(--line);border-left:3px solid #c60;border-radius:6px;padding:8px 10px;font-size:12px;color:var(--mut);line-height:1.45}
+
+/* ── Settings tab ── */
+.settings{max-width:560px;margin:0 auto}
+.settings h2{font-size:20px;margin:0 0 6px}
+.settings .opt{border-top:1px solid var(--line);margin-top:16px;padding-top:4px}
+.settings .opt label{font-size:13px;color:var(--txt)}
+.settings .rng{width:100%}
+.settings .note{margin-top:10px}
 
 /* ── FAQ tab ── */
 .faq{max-width:780px;margin:0 auto}
@@ -130,6 +142,7 @@ label{display:flex;gap:6px;align-items:center;margin-top:10px;font-size:12px;col
   <div class="nav-title">Ninety's Mural Generator</div>
   <button class="tab-btn active" onclick="showTab('painter',this)">Note Painter</button>
   <button class="tab-btn" onclick="showTab('importer',this)">Image Importer</button>
+  <button class="tab-btn" onclick="showTab('settings',this)">Settings</button>
   <button class="tab-btn" onclick="showTab('faq',this)">FAQ</button>
 </nav>
 
@@ -256,7 +269,38 @@ label{display:flex;gap:6px;align-items:center;margin-top:10px;font-size:12px;col
 </div>
 
 <!-- ══════════════════════════════════════════
-     TAB 3: FAQ
+     TAB 3: SETTINGS
+═══════════════════════════════════════════ -->
+<div id="tab-settings" class="page">
+  <div class="panel settings">
+    <h2>Settings</h2>
+    <div class="mut" style="margin-top:0">Options shared by the Note Painter and the Image Importer. The nesting limit and overlap toggle are mirrored copies of the controls on those tabs.</div>
+
+    <div class="opt">
+      <label for="setNest">Nesting limit <b id="setNestVal">2</b></label>
+      <input type="range" id="setNest" class="rng" min="0" max="8" step="1" value="2">
+      <div class="mut">How many color tags may stay open at once. Higher limits make color changes cheaper (19 instead of 26 chars).</div>
+    </div>
+
+    <div class="opt">
+      <label><input type="checkbox" id="setOvl"> Overlap papers (5×6 grid + newlines)</label>
+      <div class="mut">Each paper only uses its top-left 5×6 corner, so papers can overlap. Fewer tiles per paper means more room for color changes.</div>
+    </div>
+
+    <div class="opt">
+      <label><input type="checkbox" id="setStroke"> Enable stroke</label>
+      <div class="mut">Adds <code>&lt;stroke thickness="5"&gt;</code> to the start of every generated page, in both the Note Painter and the Image Importer. Previews switch to a black background while it is on.</div>
+      <div class="note">Stroke uses up part of your page: the tag costs <b>22 characters</b> and counts as an open tag, so it reduces both the <b>characters available</b> per page and the <b>nesting depth</b> by one level. With a nesting limit of 0, no color tags fit at all.</div>
+    </div>
+
+    <div class="opt">
+      <div class="mut" id="setInfo"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     TAB 4: FAQ
 ═══════════════════════════════════════════ -->
 <div id="tab-faq" class="page">
   <div class="faq">
@@ -331,6 +375,18 @@ label{display:flex;gap:6px;align-items:center;margin-top:10px;font-size:12px;col
           <p>The outermost <code>&lt;font face='Legacy'&gt;</code> (as well as the last color tag) is never closed at the end of the string. Roblox does not require tags to be closed and leaving it open saves 7 characters.</p>
         </div>
       </div>
+    </div>
+
+    <div class="card">
+      <h3>Stroke</h3>
+      <p>Enabling <strong>stroke</strong> in Settings adds <code>&lt;stroke thickness="5"&gt;</code> right after the opening font tag. It stays open for the whole page, so it uses <strong>22 characters</strong> and occupies one open-tag slot, leaving one less level of color nesting.</p>
+    </div>
+
+    <div class="card">
+      <h3>Nested islands (resuming the outer color)</h3>
+      <p>When a small patch of one color sits inside a larger area of another, the importer doesn't need three separate tags. It opens the patch's tag inside the outer one and closes it again, and the outer color simply resumes:</p>
+      <p><code>&lt;font color='#fff'&gt;@&lt;font color='#f00'&gt;@&lt;/font&gt;@</code></p>
+      <p>An island costs <strong>26 chars</strong> (19 to open + 7 to close). Re-declaring the outer color afterwards would cost another 19 or 26, so every island saves at least 19 chars compared to a plain color change and the savings are spent on extra detail elsewhere. Islands need one spare level of nesting, so they are unavailable at a nesting limit of 0. Up to 3 islands are considered per color run.</p>
     </div>
 
     <div class="card">

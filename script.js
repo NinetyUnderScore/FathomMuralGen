@@ -23,9 +23,14 @@
 // ---------------------------------------------------------------------
 let nestingLimit = 2;      // 0-8, slider value. maxOpen = nestingLimit + 1
 let overlapMode = false;   // when true, each paper is 5x6 (with newlines)
+let strokeMode = false;    // when true, every page starts with a <stroke> tag
 let CHAR_LIMIT = 400;
 
-const getMaxOpen = () => nestingLimit + 1;
+// The stroke tag stays open for the whole page, so it costs characters AND
+// takes one of the open-tag slots that color tags would otherwise use.
+const STROKE_TAG = '<stroke thickness="5">';
+
+const getMaxOpen = () => Math.max(0, nestingLimit + 1 - (strokeMode ? 1 : 0));
 const getColsPerPaper = () => overlapMode ? 5 : 8;
 const getRowsPerPaper = () => overlapMode ? 6 : 10;
 const getTileCount = () => getColsPerPaper() * getRowsPerPaper();
@@ -43,7 +48,7 @@ const quoteColor = hex3 => "'#" + hex3 + "'";
 function baseCharCount() {
   const n = getTileCount();
   const newlines = overlapMode ? Math.ceil(n / getColsPerPaper()) : 0;
-  return "<font face='Legacy'>".length + n + newlines;
+  return "<font face='Legacy'>".length + (strokeMode ? STROKE_TAG.length : 0) + n + newlines;
 }
 
 // ---------------------------------------------------------------------
@@ -228,17 +233,40 @@ byId('mClose').onclick = () => setClickMode('close');
 // ---------------------------------------------------------------------
 //  Nesting slider (painter) — syncs with the importer's slider
 // ---------------------------------------------------------------------
+// Refresh every label that depends on nesting / overlap / stroke
+function updateLimitLabels() {
+  byId('nestVal').textContent = nestingLimit;
+  byId('setNestVal').textContent = nestingLimit;
+  byId('nestTags').textContent = getMaxOpen();
+  byId('setInfo').innerHTML =
+    `Color tags that can be open at once: <b>${getMaxOpen()}</b><br>` +
+    `Characters left for color tags per page: <b>${Math.max(0, CHAR_LIMIT - baseCharCount())}</b>`;
+}
+
 function setNestingLimit(n) {
   nestingLimit = Math.max(0, Math.min(8, n | 0));
-  byId('nest').value = nestingLimit;
-  byId('nest2').value = nestingLimit;
-  byId('nestVal').textContent = nestingLimit;
-  byId('nestTags').textContent = getMaxOpen();
+  ['nest', 'nest2', 'setNest'].forEach(id => byId(id).value = nestingLimit);
+  updateLimitLabels();
   renderPainter();
-  if (sourceImage) recomputeImport();
+  if (sourceImage) scheduleRecompute(120);
 }
 byId('nest').oninput = e => setNestingLimit(+e.target.value);
 byId('nest2').oninput = e => setNestingLimit(+e.target.value);
+byId('setNest').oninput = e => setNestingLimit(+e.target.value);
+
+// ---------------------------------------------------------------------
+//  Stroke mode
+// ---------------------------------------------------------------------
+function setStrokeMode(on) {
+  if (strokeMode === on) return;
+  strokeMode = on;
+  byId('setStroke').checked = on;
+  document.body.classList.toggle('stroke-on', on);   // black preview backgrounds
+  updateLimitLabels();
+  renderPainter();
+  if (sourceImage) scheduleRecompute(0);
+}
+byId('setStroke').onchange = e => setStrokeMode(e.target.checked);
 
 // ---------------------------------------------------------------------
 //  Overlap mode
@@ -256,10 +284,13 @@ function setOverlapMode(on) {
     rebuildPaper();
   }
   if (byId('ovl').checked !== on) byId('ovl').checked = on;
+  if (byId('setOvl').checked !== on) byId('setOvl').checked = on;
+  updateLimitLabels();
   updatePaperLayout();
   renderPainter();
 }
 byId('ovl').onchange = e => setOverlapMode(e.target.checked);
+byId('setOvl').onchange = e => setOverlapMode(e.target.checked);
 
 // ---------------------------------------------------------------------
 //  Build the rich-text string from a list of tiles
@@ -287,7 +318,7 @@ function buildOutput(tileList = tiles) {
     tileList.filter(t => t.color).length === 1;
   if (mergeFirstColor) rootTag.color = tileList[0].color;
 
-  let text = "<font face='Legacy'" + (mergeFirstColor ? 'color=' + quoteColor(rootTag.color) : '') + '><stroke th=5>';
+  let text = "<font face='Legacy'" + (mergeFirstColor ? 'color=' + quoteColor(rootTag.color) : '') + '>' + (strokeMode ? STROKE_TAG : '');
   let wastedTags = 0;
   const tileInfo = [];
 
@@ -424,13 +455,13 @@ function renderPainter() {
   fitCount += nested;
   rem -= nested * 19;
   fitCount += Math.floor(rem / 26);
-  byId('fit').textContent = fitCount;
+  byId('fit').textContent = maxOpen === 0 ? 0 : fitCount;
 
   // Max color changes on an empty page
   const emptyBudget = Math.max(0, CHAR_LIMIT - baseCharCount());
   const emptyNested = Math.min(maxOpen, Math.floor(emptyBudget / 19));
   const emptyMore = emptyNested < maxOpen ? 0 : Math.floor((emptyBudget - emptyNested * 19) / 26);
-  byId('max').textContent = emptyNested + emptyMore;
+  byId('max').textContent = maxOpen === 0 ? 0 : emptyNested + emptyMore;
 
   byId('waste').textContent = wastedTags;
   byId('waste').className = wastedTags ? '' : '';
@@ -543,20 +574,46 @@ function fitCropToImage(fitMode) {
   syncCropInputs();
 }
 
-function syncCropInputs() {
+// recomputeDelay: ms to wait before the (expensive) preview is rebuilt,
+// or null to leave the preview alone for now (used while dragging).
+function syncCropInputs(recomputeDelay = 0) {
   ['x', 'y', 'w', 'h'].forEach(key => {
     const input = byId('c' + key);
     if (input !== document.activeElement) input.value = Math.round(crop[key]);
   });
-  scheduleRedraw();
+  scheduleRedraw(recomputeDelay);
 }
 
-function scheduleRedraw() {
-  cancelAnimationFrame(redrawHandle);
-  redrawHandle = requestAnimationFrame(() => {
-    drawCropEditor();
+// The crop editor itself is cheap and redraws every frame. The conversion
+// preview (sampling + solver) is expensive, so it is debounced: it only
+// runs once the user has stopped panning / zooming / resizing.
+let recomputeTimer = 0;
+let wheelActive = false, wheelTimer = 0;
+let lastRenderKey = null, lastRenderImage = null;
+const previewBox = document.querySelector('.prevs');
+
+function markPreviewStale() {
+  if (sourceImage) previewBox.classList.add('stale');
+}
+
+function scheduleRecompute(delay = 0) {
+  clearTimeout(recomputeTimer);
+  markPreviewStale();
+  recomputeTimer = setTimeout(() => {
+    recomputeTimer = 0;
     recomputeImport();
-  });
+  }, delay);
+}
+
+function redrawEditor() {
+  cancelAnimationFrame(redrawHandle);
+  redrawHandle = requestAnimationFrame(drawCropEditor);
+}
+
+function scheduleRedraw(recomputeDelay = 0) {
+  redrawEditor();
+  if (recomputeDelay === null) markPreviewStale();
+  else scheduleRecompute(recomputeDelay);
 }
 
 // ---------------------------------------------------------------------
@@ -611,13 +668,18 @@ function drawCropEditor() {
     cropCtx.stroke();
   };
 
-  if (rectW / shownCols > 5 && rectH / shownRows > 5) drawGridLines(shownCols, shownRows, '#fff4', 1);
+  // While panning / zooming / resizing only the cheap overlays are drawn; the
+  // per-tile grid and sample dots (thousands of shapes with many papers)
+  // come back as soon as the interaction ends.
+  const interacting = !!dragState || wheelActive;
+
+  if (!interacting && rectW / shownCols > 5 && rectH / shownRows > 5) drawGridLines(shownCols, shownRows, '#fff4', 1);
   if (wide * tall > 1) {
     if (isSideways) drawGridLines(tall, wide, '#ffd24a', 2.5);
     else drawGridLines(wide, tall, '#ffd24a', 2.5);
   }
 
-  if (byId('meth').value == 'near' && Math.min(rectW / shownCols, rectH / shownRows) > 8) {
+  if (!interacting && byId('meth').value == 'near' && Math.min(rectW / shownCols, rectH / shownRows) > 8) {
     cropCtx.fillStyle = '#ff0';
     const fracX = byId('sx').value / 100;
     const fracY = byId('sy').value / 100;
@@ -689,10 +751,17 @@ cropCanvas.onpointermove = e => {
     crop.w = Math.max(8, dragState.startCrop.w + dx);
     crop.h = byId('lock').checked ? crop.w * cropAspect : Math.max(8, dragState.startCrop.h + dy);
   }
-  syncCropInputs();
+  syncCropInputs(null);   // keep the editor live, hold the preview until release
 };
 
-cropCanvas.onpointerup = () => dragState = null;
+function endDrag() {
+  if (!dragState) return;
+  dragState = null;
+  redrawEditor();          // bring back the full overlays
+  scheduleRecompute(0);
+}
+cropCanvas.onpointerup = endDrag;
+cropCanvas.onpointercancel = endDrag;
 
 cropCanvas.onwheel = e => {
   if (!sourceImage) return;
@@ -704,7 +773,10 @@ cropCanvas.onwheel = e => {
   crop.h = byId('lock').checked ? crop.w * cropAspect : crop.h * factor;
   crop.x = centerX - crop.w / 2;
   crop.y = centerY - crop.h / 2;
-  syncCropInputs();
+  wheelActive = true;
+  clearTimeout(wheelTimer);
+  wheelTimer = setTimeout(() => { wheelActive = false; redrawEditor(); }, 250);
+  syncCropInputs(250);    // wait for the wheel to stop turning
 };
 
 cropCanvas.ondragover = e => e.preventDefault();
@@ -734,13 +806,14 @@ byId('bStr').onclick = () => fitCropToImage('stretch');
       if (key == 'w') crop.h = value * cropAspect;
       if (key == 'h') crop.w = value / cropAspect;
     }
-    syncCropInputs();
+    syncCropInputs(250);
   };
 });
 
 document.querySelector('.imp').addEventListener('input', e => {
+  if (['cx', 'cy', 'cw', 'ch'].includes(e.target.id)) return;   // handled above, debounced
   if (['mp', 'pw', 'ph'].includes(e.target.id)) updatePaperLayout();
-  else scheduleRedraw();
+  else scheduleRedraw(120);   // sliders fire constantly; let them settle briefly
 });
 
 // ---------------------------------------------------------------------
@@ -878,23 +951,44 @@ function sampleTileColors() {
 //  minimize squared color error while staying inside the character
 //  budget and the nesting limit.
 //
+//  NESTED "ISLANDS"
+//  A colored run may contain small islands of another color that are
+//  opened inside it and closed again, so the outer color resumes
+//  without being re-declared:
+//
+//      <font color='#fff'>@<font color='#000'>@</font>@
+//
+//  That costs 19 (outer) + 19 + 7 (island) = 45 chars, versus 71 for
+//  three separate tags (and 57 if all three are simply nested).
+//  Every (start, end) run therefore has several "variants": the plain
+//  run, plus the best 1, 2 or 3 islands that can be carved out of it.
+//  Each variant has its own error and extra character cost, and the DP
+//  below picks whichever mix is best.
+//
 //  DP state: (j, cost, type, depth)
 //      j     tiles 0..j-1 already covered
 //      cost  extra characters spent so far
 //      type  1 if the last run was colored, 0 if not
 //      depth number of open color tags at position j
+//            (islands are always closed again, so they do not change it)
 //
 //  dp[state] = lowest error reaching that state.
 //
 //  Transition costs:
 //    colored run, depth < maxOpen   -> 19 (nest, depth + 1)
 //    colored run, depth == maxOpen  -> 26 (close one + open, depth stays)
+//    each island inside a run       -> 26 (open nested + close), needs
+//                                      one spare level of nesting
 //    uncolored run, from colored    -> 7 * depth (close all, depth = 0)
 // ---------------------------------------------------------------------
 function solveColorRuns(tileColors) {
   const method = byId('meth').value;
+  const runMode = method == 'run';
   const n = tileColors.length;
   const maxOpen = getMaxOpen();
+  const W = n + 1;                 // row stride for (start, end) tables
+  const MAX_ISLANDS = 3;           // islands carved out of a single run
+  const ISLAND_COST = 19 + 7;      // <font color='#xyz'> + </font>
 
   const prefixR = [0], prefixG = [0], prefixB = [0], prefixSquares = [0];
   tileColors.forEach(c => {
@@ -903,6 +997,123 @@ function solveColorRuns(tileColors) {
     prefixB.push(prefixB.at(-1) + c[2]);
     prefixSquares.push(prefixSquares.at(-1) + c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
   });
+
+  // Squared error of painting tiles a..b-1 with color c
+  const errAgainst = (c, a, b) =>
+    (prefixSquares[b] - prefixSquares[a])
+    - 2 * (c[0] * (prefixR[b] - prefixR[a])
+         + c[1] * (prefixG[b] - prefixG[a])
+         + c[2] * (prefixB[b] - prefixB[a]))
+    + (b - a) * (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
+
+  const runColor = (start, end) =>
+    runMode
+      ? [prefixR, prefixG, prefixB].map(p => quantizeChannel((p[end] - p[start]) / (end - start)))
+      : tileColors[start].map(quantizeChannel);
+
+  // Color and error of every plain (start, end) run
+  const plainColor = new Array(W * W);
+  const plainErr = new Float64Array(W * W);
+  for (let a = 0; a < n; a++) {
+    for (let b = a + 1; b <= n; b++) {
+      const color = runColor(a, b);
+      plainColor[a * W + b] = color;
+      plainErr[a * W + b] = errAgainst(color, a, b);
+    }
+  }
+
+  // Scratch buffers for the island search
+  const gain = new Float64Array(W * W);
+  const bestGain = new Float64Array((MAX_ISLANDS + 1) * W);
+  const chosenFrom = new Int16Array((MAX_ISLANDS + 1) * W);
+
+  // For the run [s, e) painted with color cA, find the best sets of 1..MAX
+  // non-overlapping islands. An island [x, y) must start after tile s (a tile
+  // can only open one tag) and end before tile e (the outer color has to
+  // resume on at least one tile, where the island's </font> is placed).
+  // Returns an array indexed by island count, or null if nothing fits.
+  function pickIslands(s, e, cA) {
+    const lo = s + 1, hi = e - 1, L = hi - lo;
+    if (L < 1) return null;
+
+    for (let j = 0; j < L; j++) {
+      for (let i = j + 1; i <= L; i++) {
+        gain[j * W + i] = errAgainst(cA, lo + j, lo + i) - plainErr[(lo + j) * W + lo + i];
+      }
+    }
+    for (let i = 0; i <= L; i++) bestGain[i] = 0;
+    for (let k = 1; k <= MAX_ISLANDS; k++) {
+      bestGain[k * W] = 0;
+      for (let i = 1; i <= L; i++) {
+        let bestValue = bestGain[k * W + i - 1], from = -1;
+        for (let j = 0; j < i; j++) {
+          const g = gain[j * W + i];
+          if (g <= 0) continue;
+          const value = bestGain[(k - 1) * W + j] + g;
+          if (value > bestValue) { bestValue = value; from = j; }
+        }
+        bestGain[k * W + i] = bestValue;
+        chosenFrom[k * W + i] = from;
+      }
+    }
+
+    const result = [];
+    for (let k = 1; k <= MAX_ISLANDS; k++) {
+      const list = [];
+      for (let kk = k, i = L; kk > 0 && i > 0;) {
+        const from = chosenFrom[kk * W + i];
+        if (from < 0) { i--; }
+        else { list.unshift([lo + from, lo + i]); i = from; kk--; }
+      }
+      result[k] = list;
+    }
+    return result;
+  }
+
+  // Every way of painting [s, e): variants[0] is the plain run, later ones
+  // add islands. Each variant: { err, color, islands: [[x, y, color]], extra }
+  const variantTable = new Array(W * W);
+
+  function buildVariants(s, e) {
+    const variants = [{ err: plainErr[s * W + e], color: plainColor[s * W + e], islands: [], extra: 0 }];
+    // Islands need a spare nesting level inside the run's own tag.
+    if (maxOpen < 2 || e - s < 3) return variants;
+
+    const picks = pickIslands(s, e, plainColor[s * W + e]);
+    if (!picks) return variants;
+
+    for (let k = 1; k <= MAX_ISLANDS; k++) {
+      const islands = picks[k];
+      if (!islands.length || islands.length <= variants.at(-1).islands.length) continue;
+
+      // Tiles owned by the outer tag = the run minus its islands
+      let r = prefixR[e] - prefixR[s], g = prefixG[e] - prefixG[s], b = prefixB[e] - prefixB[s];
+      let sq = prefixSquares[e] - prefixSquares[s];
+      let count = e - s, islandError = 0;
+      islands.forEach(([x, y]) => {
+        r -= prefixR[y] - prefixR[x];
+        g -= prefixG[y] - prefixG[x];
+        b -= prefixB[y] - prefixB[x];
+        sq -= prefixSquares[y] - prefixSquares[x];
+        count -= y - x;
+        islandError += plainErr[x * W + y];
+      });
+      // With "average" sampling the outer color is re-averaged over the tiles it still owns
+      const color = runMode ? [r, g, b].map(v => quantizeChannel(v / count)) : plainColor[s * W + e];
+      const ownedError = sq - 2 * (color[0] * r + color[1] * g + color[2] * b)
+                       + count * (color[0] * color[0] + color[1] * color[1] + color[2] * color[2]);
+      const err = ownedError + islandError;
+      if (err >= variants.at(-1).err) continue;
+
+      variants.push({
+        err,
+        color,
+        islands: islands.map(([x, y]) => [x, y, plainColor[x * W + y]]),
+        extra: ISLAND_COST * islands.length,
+      });
+    }
+    return variants;
+  }
 
   const maxExtraChars = Math.max(0, (+byId('bud').value || 400) - baseCharCount());
   const costSlots = maxExtraChars + 1;
@@ -915,30 +1126,18 @@ function solveColorRuns(tileColors) {
   const prevCost = new Int16Array(stateCount);
   const prevType = new Int8Array(stateCount);
   const prevDepth = new Int8Array(stateCount);
+  const prevVariant = new Int8Array(stateCount);
 
   const stateIndex = (j, cost, type, depth) =>
     ((j * costSlots + cost) * 2 + type) * depthSlots + depth;
 
-  const runColor = (start, end) =>
-    method == 'run'
-      ? [prefixR, prefixG, prefixB].map(p => quantizeChannel((p[end] - p[start]) / (end - start)))
-      : tileColors[start].map(quantizeChannel);
-
   for (let end = 1; end <= n; end++) {
     for (let start = 0; start < end; start++) {
-      const length = end - start;
-      const sumSquares = prefixSquares[end] - prefixSquares[start];
-      const color = runColor(start, end);
+      const errorUncolored = prefixSquares[end] - prefixSquares[start];
+      const variants = buildVariants(start, end);
+      variantTable[start * W + end] = variants;
 
-      const errorUncolored = sumSquares;
-      const errorColored =
-        sumSquares
-        - 2 * (color[0] * (prefixR[end] - prefixR[start])
-             + color[1] * (prefixG[end] - prefixG[start])
-             + color[2] * (prefixB[end] - prefixB[start]))
-        + length * (color[0] * color[0] + color[1] * color[1] + color[2] * color[2]);
-
-      const relax = (newCost, type, depth, error, fromCost, fromType, fromDepth) => {
+      const relax = (newCost, type, depth, error, fromCost, fromType, fromDepth, variant) => {
         if (newCost > maxExtraChars) return;
         if (depth > maxOpen) return;
         const k = stateIndex(end, newCost, type, depth);
@@ -948,13 +1147,14 @@ function solveColorRuns(tileColors) {
           prevCost[k] = fromCost;
           prevType[k] = fromType;
           prevDepth[k] = fromDepth;
+          prevVariant[k] = variant;
         }
       };
 
       if (start === 0) {
         // First run: either uncolored (cost 0) or colored (cost 19, depth 1)
-        relax(0, 0, 0, errorUncolored, 0, 0, 0);
-        relax(19, 1, 1, errorColored, 0, 0, 0);
+        relax(0, 0, 0, errorUncolored, 0, 0, 0, 0);
+        variants.forEach((v, vi) => relax(19 + v.extra, 1, 1, v.err, 0, 0, 0, vi));
       } else {
         for (let cost = 0; cost <= maxExtraChars; cost++) {
           for (let lastType = 0; lastType < 2; lastType++) {
@@ -964,10 +1164,12 @@ function solveColorRuns(tileColors) {
 
               // Uncolored run: close all open color tags
               if (lastType === 1) {
-                relax(cost + 7 * lastDepth, 0, 0, errorSoFar + errorUncolored, cost, lastType, lastDepth);
+                relax(cost + 7 * lastDepth, 0, 0, errorSoFar + errorUncolored, cost, lastType, lastDepth, 0);
               }
 
-              // Colored run: nest if room, otherwise close one and open
+              // Colored run: nest if room, otherwise close one and open.
+              // (With stroke on and nesting limit 0 no color tag fits at all.)
+              if (maxOpen === 0) continue;
               let openCost, newDepth;
               if (lastDepth < maxOpen) {
                 openCost = 19;
@@ -976,7 +1178,12 @@ function solveColorRuns(tileColors) {
                 openCost = 26;
                 newDepth = maxOpen;
               }
-              relax(cost + openCost, 1, newDepth, errorSoFar + errorColored, cost, lastType, lastDepth);
+              for (let vi = 0; vi < variants.length; vi++) {
+                // Islands sit one level deeper than the run's own tag
+                if (vi > 0 && newDepth >= maxOpen) break;
+                relax(cost + openCost + variants[vi].extra, 1, newDepth,
+                      errorSoFar + variants[vi].err, cost, lastType, lastDepth, vi);
+              }
             }
           }
         }
@@ -998,30 +1205,39 @@ function solveColorRuns(tileColors) {
     }
   }
 
-  // Reconstruct the runs: [start, end, type, depthAfter]
+  // Reconstruct the runs: [start, end, type, depthAfter, variantIndex]
   const runs = [];
   for (let end = n, k = bestState; end > 0;) {
     const start = prevStart[k];
     const type = Math.floor(k / depthSlots) % 2;
     const depthAfter = k % depthSlots;
-    runs.unshift([start, end, type, depthAfter]);
+    runs.unshift([start, end, type, depthAfter, prevVariant[k]]);
     k = stateIndex(start, prevCost[k], prevType[k], prevDepth[k]);
     end = start;
   }
 
   // Convert runs into tile settings
   const tileSettings = Array.from({ length: n }, () => ({ color: null, closes: 0 }));
-  runs.forEach(([start, end, type, depthAfter], idx) => {
+  let islandCount = 0;
+  runs.forEach(([start, end, type, depthAfter, variantIndex], idx) => {
     const prevRun = runs[idx - 1];
     const prevType = prevRun ? prevRun[2] : 0;
     const prevDepth = prevRun ? prevRun[3] : 0;
 
     if (type === 1) {
-      tileSettings[start].color = rgbToHex3(runColor(start, end));
+      const variant = variantTable[start * W + end][variantIndex];
+      tileSettings[start].color = rgbToHex3(variant.color);
       // Close before opening only when we were already at the limit
       if (prevType === 1 && depthAfter === prevDepth) {
         tileSettings[start].closes = 1;
       }
+      // Islands: open the inner tag on its first tile, close it on the
+      // tile where the outer color resumes (which may open the next island)
+      variant.islands.forEach(([x, y, islandColor]) => {
+        tileSettings[x].color = rgbToHex3(islandColor);
+        tileSettings[y].closes = 1;
+        islandCount++;
+      });
     } else {
       // Uncolored: close everything the previous run had open
       if (prevType === 1) {
@@ -1034,7 +1250,7 @@ function solveColorRuns(tileColors) {
     tileSettings,
     runs,
     totalError: bestTotal,
-    colorTagCount: runs.filter(run => run[2] === 1).length,
+    colorTagCount: runs.filter(run => run[2] === 1).length + islandCount,
   };
 }
 
@@ -1059,7 +1275,7 @@ function drawMosaic(canvasId, wide, tall, colorFor) {
   canvas.height = shownRows * cellH;
   canvas.style.width = Math.min(shownCols * cellW / 1.4, 280) + 'px';
 
-  g.fillStyle = '#8A8B8D';
+  g.fillStyle = strokeMode ? '#000' : '#8A8B8D';
   g.fillRect(0, 0, canvas.width, canvas.height);
 
   for (let row = 0; row < gridRows; row++) {
@@ -1117,7 +1333,20 @@ async function copyToClipboard(text, button) {
 //  Recompute everything for the importer
 // ---------------------------------------------------------------------
 function recomputeImport() {
-  if (!sourceImage) { lastResults = null; return; }
+  clearTimeout(recomputeTimer);
+  recomputeTimer = 0;
+  previewBox.classList.remove('stale');
+  if (!sourceImage) { lastResults = null; lastRenderKey = null; return; }
+
+  // Only rebuild the preview when something that affects it has changed
+  const key = JSON.stringify([
+    crop.x, crop.y, crop.w, crop.h, paperRotation, overlapMode, strokeMode, nestingLimit,
+    ['meth', 'sx', 'sy', 'bud', 'br', 'ct', 'sa', 'bg', 'mp', 'pw', 'ph', 'psel'].map(id => byId(id).value),
+    byId('live').checked,
+  ]);
+  if (lastResults && sourceImage === lastRenderImage && key === lastRenderKey) return;
+  lastRenderImage = sourceImage;
+  lastRenderKey = key;
 
   const wide = papersWide(), tall = papersTall();
   const ppCols = getColsPerPaper(), ppRows = getRowsPerPaper();
@@ -1213,11 +1442,11 @@ function init() {
   rebuildPaper();
 
   // Sync sliders and picker
-  byId('nest').value = nestingLimit;
-  byId('nest2').value = nestingLimit;
-  byId('nestVal').textContent = nestingLimit;
-  byId('nestTags').textContent = getMaxOpen();
+  ['nest', 'nest2', 'setNest'].forEach(id => byId(id).value = nestingLimit);
   byId('ovl').checked = overlapMode;
+  byId('setOvl').checked = overlapMode;
+  byId('setStroke').checked = strokeMode;
+  updateLimitLabels();
 
   syncPicker();
   updatePaperLayout();
