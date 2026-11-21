@@ -30,10 +30,15 @@
     const rootTag = { hasFace: true, color: null };
     const stack = [rootTag];
 
+    // Only merge the single color into the opening tag when nothing ever
+    // closes a tag. The root tag cannot be popped, so merging a tag that the
+    // tile list intends to close would silently paint the "black" tiles in
+    // that color instead.
     const mergeFirstColor =
       tileList.length > 0 &&
       !!tileList[0].color &&
       (tileList[0].closes || 0) === 0 &&
+      tileList.every(t => !(t.closes > 0)) &&
       tileList.filter(t => t.color).length === 1;
     if (mergeFirstColor) rootTag.color = tileList[0].color;
 

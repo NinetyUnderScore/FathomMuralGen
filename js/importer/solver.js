@@ -386,10 +386,66 @@
       }
     });
 
+    // An uncolored run is encoded by closing the open tags on its first tile,
+    // which paints that run black. The same tags can be positioned so that the
+    // run inherits a neighbouring color instead, at identical character cost:
+    //
+    //   - previous color: move the closes to the tile after the run
+    //   - next color:     move the next run's opening tag onto the run's first
+    //                     tile (after the closes)
+    //
+    // A trailing run can also drop its closes entirely, because tags at the end
+    // of the page are never closed. Pick whichever of black / previous / next
+    // is closest to the run's sampled tiles, so genuine black areas stay black
+    // while isolated black specks in colored areas disappear.
+    const errorOfRun = (start, end, color) => {
+      let error = 0;
+      for (let i = start; i < end; i++) {
+        const c = tileColors[i];
+        error += (c[0] - color[0]) ** 2 + (c[1] - color[1]) ** 2 + (c[2] - color[2]) ** 2;
+      }
+      return error;
+    };
+
+    let totalError = bestTotal;
+    for (let runIndex = 0; runIndex < runs.length; runIndex++) {
+      const [start, end, type] = runs[runIndex];
+      if (type !== 0) continue;
+
+      const blackError = errorOfRun(start, end, [0, 0, 0]);
+      let bestError = blackError;
+      let action = 'black';
+      let previousDepth = 0;
+
+      const previous = runIndex > 0 ? runs[runIndex - 1] : null;
+      if (previous && previous[2] === 1 && tileSettings[start].closes === previous[3]) {
+        previousDepth = previous[3];
+        const color = variantTable[previous[0] * W + previous[1]][previous[4]].color;
+        const error = errorOfRun(start, end, color);
+        if (error < bestError) { bestError = error; action = 'previous'; }
+      }
+
+      const next = runIndex + 1 < runs.length ? runs[runIndex + 1] : null;
+      if (next && next[2] === 1 && end < n && !tileSettings[end].closes) {
+        const color = variantTable[next[0] * W + next[1]][next[4]].color;
+        const error = errorOfRun(start, end, color);
+        if (error < bestError) { bestError = error; action = 'next'; }
+      }
+
+      if (action === 'previous') {
+        tileSettings[start].closes = 0;
+        if (end < n) tileSettings[end].closes = (tileSettings[end].closes || 0) + previousDepth;
+      } else if (action === 'next') {
+        tileSettings[start].color = tileSettings[end].color;
+        tileSettings[end].color = null;
+      }
+      totalError += bestError - blackError;
+    }
+
     return {
       tileSettings,
       runs,
-      totalError: bestTotal,
+      totalError,
       colorTagCount: runs.filter(run => run[2] === 1).length + islandCount,
     };
   }
